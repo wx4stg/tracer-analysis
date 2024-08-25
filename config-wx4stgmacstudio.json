@@ -1,0 +1,5 @@
+{
+    "name": "HDWX Cluster",
+    "scheduler_port" : 8786,
+    "n_workers": 4
+}

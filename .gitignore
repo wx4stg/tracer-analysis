@@ -1,0 +1,7 @@
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+acars/
+armdata/
+bl-class/TAMU_TRACER_radiosonde_data_final/
+tobac_15/

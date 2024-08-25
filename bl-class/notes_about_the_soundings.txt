@@ -1,0 +1,7 @@
+7/12 21:36 low confidence
+7/12 23:27 low confidence
+7/27 21:23 low confidence
+7/29 17:25 has two BLs, ~850m and ~525m
+7/29 21:09 low confidence
+8/10 22:42 has two BLs, ~2km and ~800m
+9/19 16:59 has two BLs, ~1.5km and ~600m
