@@ -1,5 +1,5 @@
 from os import path
-from datetime import datetime as dt
+from datetime import datetime as dt, timedelta
 
 import holoviews as hv
 import geoviews as gv
@@ -8,25 +8,15 @@ import panel as pn
 import numpy as np
 import xarray as xr
 
-from goes2go improt GOES
+from goes2go import GOES
 
 from pyxlma import coords
 
-def plot_satellite(dataset, time):
-    index_of_tobac = (dataset.time.data == time).nonzero()[0][0]
-    if index_of_tobac in download_results['tobac_idx'].values:
-        path_of_sat = download_results[download_results['tobac_idx'] == index_of_tobac]['file'].values[0]
-        alpha = 0.5
-    else:
-        print('No satellite data for this time...')
-        path_of_sat = download_results[download_results['tobac_idx'] == 0]['file'].values[0]
-        alpha = 0
-    path_of_sat = path.join('/Users/stgardner4/data/', path_of_sat)
-    max_x = dataset.g16_scan_x.max().data.item()
-    min_x = dataset.g16_scan_x.min().data.item()
-    max_y = dataset.g16_scan_y.max().data.item()
-    min_y = dataset.g16_scan_y.min().data.item()
-    sat = xr.open_dataset(path_of_sat)
+hv.extension('bokeh')
+
+def plot_satellite(dl_res, time, min_x, max_x, min_y, max_y):
+    closest_time = dl_res.iloc[(dl_res['valid'] - time).abs().argsort()[:1]]
+    sat = xr.open_dataset(closest_time['path'].values[0])
     padding = .001
     area_i_want = sat.sel(y=slice(max_y+padding, min_y-padding), x=slice(min_x-padding, max_x+padding))
     geosys = coords.GeographicSystem()
@@ -36,33 +26,13 @@ def plot_satellite(dataset, time):
     sat_lon, sat_lat, _ = geosys.fromECEF(sat_ecef_X, sat_ecef_Y, sat_ecef_Z)
     sat_lon.shape = this_satellite_scan_x.shape
     sat_lat.shape = this_satellite_scan_y.shape
-    if 'TEMP' not in area_i_want.data_vars:
-        fk1 = 1.08033e+04
-        fk2 = 1.39274e+03
-        bc1 = 0.07550
-        bc2 = 0.99975
-        area_i_want['TEMP'] = (fk2 / (np.log((fk1 / area_i_want.Rad) + 1))  -  bc1) / bc2
-    plot = gv.QuadMesh((sat_lon, sat_lat, area_i_want.TEMP.data), kdims=['lon', 'lat'], vdims=['Cloud Top Temperature']).opts(cmap='viridis', tools=['hover'], alpha=alpha)
+    plot = gv.QuadMesh((sat_lon, sat_lat, area_i_want.CMI_C13.data), kdims=['lon', 'lat'], vdims=['IR Brightness Temperature']).opts(cmap='viridis', tools=['hover'])
     return plot
-
-
-def get_time(utc_nanoseconds):
-    if type(utc_nanoseconds) == np.datetime64:
-        return utc_nanoseconds
-    else:
-        return np.datetime64(utc_nanoseconds, 'ns')
-
-
-def get_time_str(utc_nanoseconds):
-    time_str = dt.fromtimestamp(float(utc_nanoseconds) / 1e9, UTC).strftime('%Y-%m-%d %H:%M:%S')
-    return time_str
 
 
 def plot_seg_mask(dataset, time):
     this_time = dataset.sel(time=time, method='nearest')
-    seg_mask = this_time.segmentation_mask.data.copy().astype(float)
-    seg_mask[seg_mask == 0] = np.nan
-    plot = gv.QuadMesh((this_time.lon, this_time.lat, seg_mask), kdims=['lon', 'lat'], vdims=['segmentation mask']).opts(cmap='plasma', colorbar=False)
+    plot = gv.QuadMesh((this_time.lon.data, this_time.lat.data, this_time.segmentation_mask.data), kdims=['lon', 'lat'], vdims=['segmentation mask']).opts(cmap='plasma', colorbar=False)
     return plot
 
 def plot_features(dataset, time):
@@ -72,19 +42,32 @@ def plot_features(dataset, time):
     return gv.Points((lons, lats, feat_ids), kdims=['lon', 'lat'], vdims=['Feature ID']).opts(color='Cell ID', cmap='plasma', colorbar=True, tools=['hover'], size=4, line_color='k', line_width=0.5)
 
 
-def get_satellite_data_for_time_range(time_start, time_end):
-    
-    
-
 if __name__ == '__main__':
-    tfm = xr.open_dataset('tobac_15/tobac_Save_20220601/Track_features_merges_with_goes.nc')
-    unique_times = np.unique(tfm.time.data).astype('datetime64[us]').astype(dt)
-    date_slider = pn.widgets.DiscreteSlider(name='Date', options=unique_times, value=unique_times[0])
-    live_time_str = pn.bind(get_time_str, date_slider)
-    live_time = pn.bind(get_time, date_slider)
-    date_label = pn.pane.Markdown(live_time_str)
-    mesh = gv.DynamicMap(pn.bind(plot_seg_mask, tfm, live_time))
-    satellite = gv.DynamicMap(pn.bind(plot_satellite, tfm, live_time))
-    feature_points = gv.DynamicMap(pn.bind(plot_features, tfm, live_time))
-    my_map = (gv.tile_sources.OSM * mesh * satellite * feature_points.opts(alpha=0.7)).opts(width=800, height=800)
-    col = pn.Column(date_slider, date_label, my_map)
+    tfm = xr.open_dataset('tobac_15/tobac_Save_20220601/Track_features_merges_augmented.nc')
+    tfm.segmentation_mask.data = tfm.segmentation_mask.data.astype(float)
+    tfm.segmentation_mask.data[tfm.segmentation_mask.data == 0] = np.nan
+    
+    sat_min_x = tfm.g16_scan_x.min().data.item()
+    sat_max_x = tfm.g16_scan_x.max().data.item()
+    sat_min_y = tfm.g16_scan_y.min().data.item()
+    sat_max_y = tfm.g16_scan_y.max().data.item()
+
+    g16 = GOES(satellite=16, product='ABI-L2-MCMIPC')
+    goes_time_range_start = tfm.time.data.astype('datetime64[us]').astype(dt).min()
+    goes_time_range_end = tfm.time.data.astype('datetime64[us]').astype(dt).max()
+    download_results = g16.timerange(goes_time_range_start-timedelta(minutes=15), goes_time_range_end+timedelta(minutes=15), max_cpus=12)
+    download_results['valid'] = download_results[['start', 'end']].mean(axis=1)
+    download_results['path'] = '/Volumes/LtgSSD/' + download_results['file'].values
+    unique_times = np.unique(tfm.time.data).astype('datetime64[us]').astype(dt).tolist()
+    date_slider = pn.widgets.Select(name='Date', options=unique_times, value=unique_times[0])
+    mesh = gv.DynamicMap(pn.bind(plot_seg_mask, tfm, date_slider.value))
+    satellite = gv.DynamicMap(pn.bind(plot_satellite, download_results, date_slider.value,
+                                      sat_min_x, sat_max_x, sat_min_y, sat_max_y))
+    feature_points = gv.DynamicMap(pn.bind(plot_features, tfm, date_slider.value))
+    my_map = (gv.tile_sources.OSM *
+              mesh.opts(tools=['hover']) *
+              feature_points.opts(alpha=0.7, tools=[]) *
+              satellite
+              ).opts(width=800, height=800)
+    col = pn.Column(date_slider, my_map)
+    pn.serve(col, port=5006)
