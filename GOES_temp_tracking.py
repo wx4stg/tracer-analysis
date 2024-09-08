@@ -1,7 +1,5 @@
 from os import path, listdir, remove
 from dask.distributed import Client
-from functools import partial
-
 from goes2go import GOES
 
 import xarray as xr
@@ -10,12 +8,18 @@ from dask import array as da
 from dask.distributed import print
 
 from datetime import datetime as dt, timedelta
-from metpy.interpolate import interpolate_to_points
+from scipy.interpolate import griddata
 
 from pyxlma import coords
 
 base_path = path.dirname(__file__)
-USE_DASK = False
+USE_DASK = True
+FIELD_I_WANT = 'L2-MCMIPC'
+# L2-ACHTF - derived cloud top temperature
+# L2-MCMIPC - channel 13 brightness temperature
+# L2-ACHAC - derived cloud top height
+
+
 
 def read_tobac_ds(tobac_path):
     from glmtools.io.lightning_ellipse import lightning_ellipse_rev
@@ -42,13 +46,12 @@ def read_tobac_ds(tobac_path):
 def fixup_transformed_coords(transformed_coords, input_shape):
     for transformed in transformed_coords:
         if not isinstance(transformed, np.ndarray):
-            transformed = np.atleast_1d(transformed)
-        transformed.shape = input_shape
+            transformed = da.atleast_1d(transformed)
+        transformed = transformed.reshape(input_shape)
     return transformed_coords
 
 
 def find_satellite_temp_for_feature(tfm_time, feature_i_want, area_i_want):
-    print(f'Finding satellite temperature for feature {feature_i_want} {tfm_time.time.data.astype("datetime64[s]").item()}')
     # Find the index boundaries of the feature
     x_indices_valid, y_indices_valid = np.asarray(tfm_time.segmentation_mask == feature_i_want).nonzero()
     first_x_idx = np.min(x_indices_valid)
@@ -83,7 +86,7 @@ def find_satellite_temp_for_feature(tfm_time, feature_i_want, area_i_want):
     feature_area_i_want = area_i_want.sel(y=slice(this_feature_g16_ymax+feature_padding, this_feature_g16_ymin-feature_padding),
                                   x=slice(this_feature_g16_xmin-feature_padding, this_feature_g16_xmax+feature_padding))
     
-    this_satellite_scan_x, this_satellite_scan_y = np.meshgrid(feature_area_i_want.x, feature_area_i_want.y)
+    this_satellite_scan_x, this_satellite_scan_y = da.meshgrid(feature_area_i_want.x, feature_area_i_want.y)
     sat_ecef = satsys.toECEF(this_satellite_scan_x.flatten(), this_satellite_scan_y.flatten(), np.zeros_like(this_satellite_scan_x.flatten()))
     sat_ecef_X, sat_ecef_Y, sat_ecef_Z = fixup_transformed_coords(sat_ecef, this_satellite_scan_x.flatten().shape)
     sat_tpcs = tpcs.fromECEF(sat_ecef_X.flatten(), sat_ecef_Y.flatten(), sat_ecef_Z.flatten())
@@ -104,10 +107,11 @@ def find_satellite_temp_for_feature(tfm_time, feature_i_want, area_i_want):
             return np.nan, np.nan, np.nan
     else:
         raise ValueError('No temperature data found in feature_area_i_want')
-    vals = interpolate_to_points(
+    vals = griddata(
         np.array([sat_tpcs_X.flatten(), sat_tpcs_Y.flatten()]).T,
         vals_to_interp,
         np.array([this_feature_x2d.flatten(), this_feature_y2d.flatten()]).T,
+        method='linear'
     )
     vals.shape = this_feature_x2d.shape
     vals_i_want = vals[this_seg_mask == feature_i_want]
@@ -116,14 +120,14 @@ def find_satellite_temp_for_feature(tfm_time, feature_i_want, area_i_want):
         mean_sat_temp = np.nan
         std_sat_temp = np.nan
     else:
-        min_sat_temp = np.nanmin(vals_i_want)
-        mean_sat_temp = np.nanmean(vals_i_want)
-        std_sat_temp = np.nanvar(vals_i_want)**0.5
+        min_sat_temp = da.nanmin(vals_i_want)
+        mean_sat_temp = da.nanmean(vals_i_want)
+        std_sat_temp = da.nanstd(vals_i_want)
     return min_sat_temp, mean_sat_temp, std_sat_temp
 
 
 def find_satellite_temp_for_timestep(tfm_time, goes_file_path, num_features):
-    satellite_data = xr.open_dataset(goes_file_path).load()
+    satellite_data = xr.open_dataset(goes_file_path, chunks='auto').load()
     max_x = tfm_time.g16_scan_x.max().data.item()
     min_x = tfm_time.g16_scan_x.min().data.item()
     max_y = tfm_time.g16_scan_y.max().data.item()
@@ -139,11 +143,11 @@ def find_satellite_temp_for_timestep(tfm_time, goes_file_path, num_features):
         mins[feature_index] = min_sat_temp
         means[feature_index] = mean_sat_temp
         stds[feature_index] = std_sat_temp
+    satellite_data.close()
     return da.array(mins), da.array(means), da.array(stds)
 
 
 def add_goes_data_to_tobac_path(tobac_path, thing_to_plot):
-    client = Client('tcp://127.0.0.1:8786')
     tfm = read_tobac_ds(tobac_path)
     min_sat_temp = da.full((tfm.feature.shape[0], tfm.time.shape[0]), np.nan)
     mean_sat_temp = da.full((tfm.feature.shape[0], tfm.time.shape[0]), np.nan)
@@ -152,26 +156,38 @@ def add_goes_data_to_tobac_path(tobac_path, thing_to_plot):
     goes_time_range_start = tfm.time.data.astype('datetime64[s]').astype(dt)[0]
     goes_time_range_end = tfm.time.data.astype('datetime64[s]').astype(dt)[-1]
     goes_ctt = GOES(satellite=16, product=f'ABI-{thing_to_plot}')
-    download_results = goes_ctt.timerange(goes_time_range_start-timedelta(minutes=15), goes_time_range_end+timedelta(minutes=15), max_cpus=12)
+    print('Start download')
+    download_results = goes_ctt.timerange(goes_time_range_start-timedelta(minutes=15), goes_time_range_end+timedelta(minutes=15))
+    print('End download')
+    
     download_results['valid'] = download_results[['start', 'end']].mean(axis=1)
     valid_times = download_results['valid'].values.astype('datetime64[s]')
     tobac_times = tfm.time.data.astype('datetime64[s]')
     time_diffs = np.abs(tobac_times[:, np.newaxis] - valid_times)
     goes_time_matching_tobac_indices = np.argmin(time_diffs, axis=0)
     download_results['tobac_idx'] = goes_time_matching_tobac_indices
+    for idx, num_occurrences in zip(*np.unique(goes_time_matching_tobac_indices, return_counts=True)):
+        if num_occurrences > 1:
+            dup_df = download_results[download_results['tobac_idx'] == idx]
+            time_to_match = tobac_times[idx]
+            diff = np.abs(dup_df['valid'].values - time_to_match)
+            download_results.drop(dup_df[diff > diff.min()].index, inplace=True)
+    download_results.reset_index(drop=True, inplace=True)
+    long_time_gaps = np.diff(download_results['valid'].values).astype('timedelta64[s]') >= 601
+    gap_time_start = download_results['valid'].values[:-1][long_time_gaps]
+    gap_time_end = download_results['valid'].values[1:][long_time_gaps]
+    for gap in zip(gap_time_start, gap_time_end):
+        gap = np.array(gap).astype('datetime64[s]')
+        print(f'Warning, long gap between {gap[0]} and {gap[1]}')
     rets = []
-    for _, row in download_results.iterrows():
+    num_rows = len(download_results)
+    for a, row in download_results.iterrows():
         goes_file_path = path.join('/Volumes/LtgSSD/', row['file'])
         tobac_idx_with_goes_time = row['tobac_idx']
         tfm_time = tfm.isel(time=tobac_idx_with_goes_time)
-        if USE_DASK:
-            rets.append(client.submit(find_satellite_temp_for_timestep, tfm_time, goes_file_path, tfm.feature.shape[0]))
-        else:
-            rets.append(find_satellite_temp_for_timestep(tfm_time, goes_file_path, tfm.feature.shape[0]))
-    if USE_DASK:
-        res = da.array(client.gather(rets))
-    else:
-        res = np.array(rets)
+        print(f'({(100*a/num_rows):.1f}%) {tfm_time.time.data.astype("datetime64[s]").astype(dt)}')
+        rets.append(find_satellite_temp_for_timestep(tfm_time, goes_file_path, tfm.feature.shape[0]))
+    res = da.array(rets)
     for res_idx, full_idx in enumerate(download_results['tobac_idx'].values):
         min_sat_temp[:, full_idx] = res[res_idx, 0, :]
         mean_sat_temp[:, full_idx] = res[res_idx, 1, :]
@@ -182,27 +198,33 @@ def add_goes_data_to_tobac_path(tobac_path, thing_to_plot):
     path_to_save = tobac_path.replace('merges.nc', 'merges_augmented.nc')
     if path.exists(path_to_save):
         remove(path_to_save)
-    tfm.to_netcdf(path_to_save)
+    comp = dict(zlib=True, complevel=5)
+    enc = {var: comp for var in tfm.data_vars if not np.issubdtype(tfm[var].dtype, str)}
+    tfm.to_netcdf(path_to_save, encoding=enc)
 
 if __name__ == '__main__':
-    client = Client('tcp://127.0.0.1:8786')
-    tobac_main_path = path.join(base_path, 'tobac_15')
+    if USE_DASK:
+        client = Client('tcp://127.0.0.1:8786')
+    tobac_main_path = path.join(path.sep, 'Volumes', 'LtgSSD', 'tobac_saves')
     tobac_dayfiles = []
     for d in sorted(listdir(tobac_main_path)):
-        if path.exists(path.join(tobac_main_path, d, 'Track_features_merges_augmented.nc')):
-            tobac_dayfiles.append(path.join(tobac_main_path, d, 'Track_features_merges_augmented.nc'))
-        else:
-            tobac_dayfiles.append(path.join(tobac_main_path, d, 'Track_features_merges.nc'))
+        if path.isdir(path.join(tobac_main_path, d)):
+            if path.exists(path.join(tobac_main_path, d, 'Track_features_merges_augmented.nc')):
+                tobac_dayfiles.append(path.join(tobac_main_path, d, 'Track_features_merges_augmented.nc'))
+            else:
+                if path.exists(path.join(tobac_main_path, d, 'Track_features_merges.nc')):
+                    tobac_dayfiles.append(path.join(tobac_main_path, d, 'Track_features_merges.nc'))
+                else:
+                    print(f'Need to tobac track for day: {d}')
 
     # TESTING: Only do the first dayfile
-    tobac_dayfiles = tobac_dayfiles[:1]
+    tobac_dayfiles = [tobac_dayfiles[4]]
     if USE_DASK:
-        res = client.map(add_goes_data_to_tobac_path, tobac_dayfiles, ['L2-ACHAC']*len(tobac_dayfiles)) 
+        print('started mapping')
+        res = client.map(add_goes_data_to_tobac_path, tobac_dayfiles, [FIELD_I_WANT]*len(tobac_dayfiles))
+        print('done mapping')
         client.gather(res)
     else:
         for tobac_file in tobac_dayfiles:
-            add_goes_data_to_tobac_path(tobac_file, 'L2-ACHAC')
+            add_goes_data_to_tobac_path(tobac_file, FIELD_I_WANT)
     
-    # L2-ACHTF - derived cloud top temperature
-    # L2-MCMIPC - channel 13 brightness temperature
-    # L2-ACHAC - derived cloud top height
