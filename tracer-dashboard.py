@@ -14,6 +14,8 @@ from pyxlma import coords
 from glmtools.io.lightning_ellipse import lightning_ellipse_rev
 import cmweather
 
+import warnings
+
 hv.extension('bokeh')
 
 def plot_satellite(dl_res, time, min_x, max_x, min_y, max_y, channel_select, satellite_tick):
@@ -38,9 +40,7 @@ def plot_satellite(dl_res, time, min_x, max_x, min_y, max_y, channel_select, sat
 
 
 def plot_radar(dataset, time, radar_selector, z_selector, radar_tick):
-    print(time)
     this_time = dataset.sel(time=time, method='nearest')
-    print(this_time.time.data.astype('datetime64[us]').astype(dt).item())
     lons = this_time.lon.data
     lats = this_time.lat.data
     clim_to_use = None
@@ -76,19 +76,65 @@ def plot_seg_mask(dataset, time, seg_selector, seg_tick):
     return plot
 
 
+def plot_sfc_obs(dataset, time, var_to_plot, sfc_tick):
+    lower_time_bound = time - timedelta(hours=1)
+    time = np.array([time]).astype('datetime64[us]')[0]
+    lower_time_bound = np.array([lower_time_bound]).astype('datetime64[us]')[0]
+    before = (dataset.observationTime.compute() <= time).compute()
+    after = (dataset.observationTime.compute() >= lower_time_bound).compute()
+    rec_i_want = dataset.where((before & after), drop=True)
+    rec_i_want = rec_i_want.where(~np.isnan(rec_i_want[var_to_plot]).compute(), drop=True)
+    if var_to_plot == 'dewpoint':
+        plot = gv.Points((rec_i_want.longitude, rec_i_want.latitude, ((9/5)*(rec_i_want.dewpoint-273.15)+32), rec_i_want.stationId),
+                kdims=['longitude', 'latitude'], vdims=['dewpoint', 'ID']).opts(size=7, color='dewpoint', cmap='BrBG', clim=(60, 80), tools=['hover'])
+    elif var_to_plot == 'temperature':
+        plot = gv.Points((rec_i_want.longitude, rec_i_want.latitude, ((9/5)*(rec_i_want.temperature-273.15)+32), rec_i_want.stationId),
+                kdims=['longitude', 'latitude'], vdims=['temperature', 'ID']).opts(size=7, color='temperature', cmap='rainbow', clim=(50, 100), tools=['hover'])
+    elif var_to_plot == 'u':
+        raise NotImplementedError('Cannot plot wind barbs in bokeh')
+    if not sfc_tick:
+        plot = plot.opts(visible=False)
+    return plot
+
+
+
+def plot_lma(dataset, time, var_to_plot, lma_tick):
+    lower_time_bound = time - timedelta(minutes=20)
+    time = np.array([time]).astype('datetime64[us]')[0]
+    lower_time_bound = np.array([lower_time_bound]).astype('datetime64[us]')[0]
+    lma_i_want = dataset.where(((dataset.event_time <= time) & (dataset.event_time >= lower_time_bound) & (dataset.event_chi2 <= 1)).compute(), drop=True)
+    plot = gv.Points((lma_i_want.event_longitude.data, lma_i_want.event_latitude.data, lma_i_want[var_to_plot].data), kdims=['Longitude', 'Latitude'], vdims=[var_to_plot]).opts(cmap='magma', visible=lma_tick)
+    return plot
+
 if __name__ == '__main__':
-    tfm = xr.open_dataset('/Volumes/LtgSSD/tobac_saves/tobac_Save_20220602/Track_features_merges_augmented2.zarr', chunks='auto')
+    date_i_want = dt(2022, 6, 2, 0, 0, 0)
+    tfm = xr.open_dataset(f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/Track_features_merges_augmented2.zarr', engine='zarr', chunks='auto')
+
+    grid_max_lon = tfm.lon.max().compute()
+    grid_min_lon = tfm.lon.min().compute()
+    grid_max_lat = tfm.lat.max().compute()
+    grid_min_lat = tfm.lat.min().compute()
+
     goes_time_range_start = tfm.time.data.astype('datetime64[us]').astype(dt).min()
     goes_time_range_end = tfm.time.data.astype('datetime64[us]').astype(dt).max()
 
-    radar = xr.open_mfdataset(goes_time_range_start.strftime('/Volumes/LtgSSD/nexrad_zarr/%B/%Y%m%d/')+'*.zarr', engine='zarr', chunks='auto')
+    radar = xr.open_mfdataset(date_i_want.strftime('/Volumes/LtgSSD/nexrad_zarr/%B/%Y%m%d/')+'*.zarr', engine='zarr', chunks='auto')
     radar = radar.isel(nradar=0)
     radar['lat'] = tfm.lat
     radar['lon'] = tfm.lon
 
-    lma = xr.open_dataset('/Volumes/LtgSSD/'+goes_time_range_start.strftime('%B').lower()+goes_time_range_start.strftime('/6sensor_minimum/LYLOUT_%y%m%d_000000_86400_map500m.nc'),
+    madis_file = path.join(path.sep, 'Volumes', 'LtgSSD', 'sfcdata_madis', date_i_want.strftime('%Y%m%d_*'))
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore')
+        madis_ds = xr.open_mfdataset(madis_file, engine='netcdf4', chunks='auto', coords='minimal', concat_dim='recNum', combine='nested', compat='override')
+    madis_ds = madis_ds.where(((madis_ds.longitude <= grid_max_lon) & (madis_ds.longitude >= grid_min_lon) & (madis_ds.latitude <= grid_max_lat) & (madis_ds.latitude >= grid_min_lat)).compute(), drop=True)
+    madis_ds = madis_ds.where(np.logical_and(madis_ds.stationId != b'F5830', madis_ds.stationId != b'6114D').compute(), drop=True)
+    # madis_ds['u'] = -madis_ds.windSpeed * np.sin(np.deg2rad(madis_ds.windDir))
+    # madis_ds['v'] = -madis_ds.windSpeed * np.cos(np.deg2rad(madis_ds.windDir))
+
+
+    lma = xr.open_dataset('/Volumes/LtgSSD/'+date_i_want.strftime('%B').lower()+date_i_want.strftime('/6sensor_minimum/LYLOUT_%y%m%d_000000_86400_map500m.nc'),
                           chunks='auto')
-    print(lma)
     
     
     sat_min_x = tfm.g16_scan_x.min().data.compute()
@@ -97,7 +143,6 @@ if __name__ == '__main__':
     sat_max_y = tfm.g16_scan_y.max().data.compute()
 
     g16 = GOES(satellite=16, product='ABI-L2-MCMIPC')
-    print('Downloading GOES data')
     download_results = g16.timerange(goes_time_range_start-timedelta(minutes=15), goes_time_range_end+timedelta(minutes=15), max_cpus=12)
     download_results['valid'] = download_results[['start', 'end']].mean(axis=1)
     download_results['path'] = '/Volumes/LtgSSD/' + download_results['file'].values
@@ -119,11 +164,23 @@ if __name__ == '__main__':
     radar_tick = pn.widgets.Checkbox(name='Show Radar')
     radar_mesh = hv.DynamicMap(pn.bind(plot_radar, radar, date_slider, radar_sel, z_sel, radar_tick))
 
-    
+
+    sfc_tick = pn.widgets.Checkbox(name='Show Surface Obs', value=True)
+    sfc_sel = pn.widgets.Select(name='Surface Obs Variable', options=['temperature', 'dewpoint'], value='dewpoint')
+    sfc = hv.DynamicMap(pn.bind(plot_sfc_obs, madis_ds, date_slider, sfc_sel, sfc_tick))
+
+
+    lma_tick = pn.widgets.Checkbox(name='Show LMA')
+    lma_sel = pn.widgets.Select(name='LMA Variable', options=['event_time', 'event_power', 'event_altitude'], value='event_time')
+    lma = hv.DynamicMap(pn.bind(plot_lma, lma, date_slider, lma_sel, lma_tick))
+
     my_map = (gv.tile_sources.OSM *
               radar_mesh.opts(alpha=0.85) *
               satellite.opts(alpha=0.85) *
-              seg.opts(alpha=0.5)
+              seg.opts(alpha=0.5) *
+              sfc.opts(alpha=0.5) *
+              lma
               ).opts(width=800, height=800)
-    col = pn.Row(pn.Column(date_slider, my_map), pn.Column(seg_sel, seg_tick, channel_select, satellite_tick, radar_sel, z_sel, radar_tick))
-    pn.serve(col, port=5006, websocket_origin='100.83.93.83:5006')
+    col = pn.Row(pn.Column(date_slider, my_map), pn.Column(seg_sel, seg_tick, channel_select, satellite_tick, radar_sel, z_sel, radar_tick, sfc_sel, sfc_tick,
+                                                           lma_sel, lma_tick))
+    pn.serve(col, port=5006, websocket_origin=['localhost:5006', '100.83.93.83:5006'])
