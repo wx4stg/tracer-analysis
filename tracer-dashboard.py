@@ -241,7 +241,18 @@ def avg_t_label(time, augmenter):
         label_str += f'\n ### Surface Based:\n### CAPE: {sb_cape[0]:.2f} J/kg CINH: {sb_cinh[0]:.2f} J/kg ECAPE: {sb_ecape[0]:.2f} J/kg'
         label_str += f'\n### Mixed Layer:\n### CAPE: {ml_cape[0]:.2f} J/kg CINH: {ml_cinh[0]:.2f} J/kg ECAPE: {ml_ecape[0]:.2f} J/kg'
         return label_str
-    return 'Avg T: N/A Avg Td: N/A'
+    return '### Avg T: N/A Avg Td: N/A'
+
+def cell_cloud_top_plot(dataset, time):
+    time_lower_bound = time - timedelta(hours=1)
+    time_i_want = np.array([time]).astype('datetime64[ns]')[0]
+    time_lower_bound = np.array([time_lower_bound]).astype('datetime64[ns]')[0]
+    min_sats = dataset['min_L2-MCMIPC']
+    min_sats_filt = min_sats.where(((min_sats.time >= time_lower_bound) & (min_sats.time <= time_i_want)), drop=True)
+    feat_2d, time_2d = np.meshgrid(min_sats_filt.feature.data, min_sats_filt.time.data)
+    plot = hv.Scatter((time_2d.T.flatten(), min_sats_filt.data.flatten(), feat_2d.T.flatten()),
+           kdims=['Time'], vdims=['Channel 13 Brightness Minimum', 'Feature ID']).opts(color='Feature ID', cmap='viridis', xlim=(time_lower_bound, time_i_want), ylim=(220, 310))
+    return plot
 
 
 if __name__ == '__main__':
@@ -329,18 +340,25 @@ if __name__ == '__main__':
     sounding_isotherms = plot_sounding_isotherms(sounding, np.arange(-110, 41, 10), temp_offset)
     sounding_label = pn.pane.Markdown(pn.bind(avg_t_label, date_slider, augment_data))
 
+    cloud_top_plot = hv.DynamicMap(pn.bind(cell_cloud_top_plot, tfm, date_slider))
+
     write_out_button = pn.widgets.Button(name='Write')
     pn.bind(write_sfc_sel, write_out_button, watch=True)
+
+    lim_mins = (-98.6, 28)
+    lim_maxs = (-93.2, 32.5)
+    xmin, ymin = hv.util.transform.lon_lat_to_easting_northing(*lim_mins)
+    xmax, ymax = hv.util.transform.lon_lat_to_easting_northing(*lim_maxs)
 
     my_map = (gv.tile_sources.OSM *
               satellite.opts(alpha=0.85) *
               radar_mesh.opts(alpha=0.85) *
-              seg.opts(alpha=0.5) *
+              seg.opts(alpha=0.5, tools=['hover']) *
               sfc.opts(alpha=0.5, tools=['hover']) *
               lma.opts(tools=['hover'])
-              ).opts(width=800, height=800)
+              ).opts(width=800, height=800, xlim=(xmin, xmax), ylim=(ymin, ymax))
     my_skewT = (sounding_isotherms * sounding_T * sounding_Td).opts(width=400, height=400, logy=True, xlim=(-40, 35), ylim=(1020, 100))
     control_column = pn.Column(date_slider, seg_sel, seg_tick, channel_select, satellite_tick, radar_sel, z_sel, radar_tick, sfc_sel, sfc_tick,
                                                            lma_sel, lma_tick, write_out_button)
-    col = pn.Row(pn.Column(my_map), pn.Column(my_skewT, sounding_label), control_column)
+    col = pn.Row(pn.Column(my_map), pn.Column(my_skewT, sounding_label, pn.Row(cloud_top_plot)), control_column)
     pn.serve(col, port=5006, websocket_origin=['localhost:5006', '100.83.93.83:5006'])
