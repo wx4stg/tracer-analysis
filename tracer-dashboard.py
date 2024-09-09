@@ -5,6 +5,8 @@ import holoviews as hv
 import geoviews as gv
 import panel as pn
 
+import polars as pl
+
 import numpy as np
 import xarray as xr
 from dask import array as da
@@ -15,11 +17,19 @@ from pyxlma import coords
 from glmtools.io.lightning_ellipse import lightning_ellipse_rev
 import cmweather
 
+from functools import partial
+
 import warnings
 
 hv.extension('bokeh')
 
+selected_time = None
+selected_idx = []
+
 def plot_satellite(dl_res, time, min_x, max_x, min_y, max_y, channel_select, satellite_tick):
+    if not satellite_tick:
+        return gv.QuadMesh(([0, 1], [0, 1], [[0, 1], [2, 3]]), kdims=['Longitude', 'Latitude'], vdims=[channel_select]).opts(visible=False)
+    print('Plotting satellite')
     closest_time = dl_res.iloc[(dl_res['valid'] - time).abs().argsort()[:1]]
     sat = xr.open_dataset(closest_time['path'].values[0])
     padding = .001
@@ -37,10 +47,14 @@ def plot_satellite(dl_res, time, min_x, max_x, min_y, max_y, channel_select, sat
     else:
         cmap_to_use = 'viridis'
     plot = gv.QuadMesh((sat_lon, sat_lat, area_i_want.CMI_C13.data), kdims=['Longitude', 'Latitude'], vdims=[channel_select]).opts(cmap=cmap_to_use, visible=satellite_tick)
+    print(f'Satellite plot done for {time}')
     return plot
 
 
 def plot_radar(dataset, time, radar_selector, z_selector, radar_tick):
+    if not radar_tick:
+        return gv.QuadMesh(([0, 1], [0, 1], [[0, 1], [2, 3]]), kdims=['Longitude', 'Latitude'], vdims=[radar_selector]).opts(visible=False)
+    print('Plotting radar')
     this_time = dataset.sel(time=time, method='nearest')
     lons = this_time.lon.data
     lats = this_time.lat.data
@@ -62,9 +76,13 @@ def plot_radar(dataset, time, radar_selector, z_selector, radar_tick):
         cmap=cmap_to_use, colorbar=False, tools=['hover'], visible=radar_tick)
     if clim_to_use is not None:
         plot = plot.opts(clim=clim_to_use)
+    print(f'Radar plot done for {time}')
     return plot
 
 def plot_seg_mask(dataset, time, seg_selector, seg_tick):
+    if not seg_tick:
+        return gv.QuadMesh(([0, 1], [0, 1], [[0, 1], [2, 3]]), kdims=['Longitude', 'Latitude'], vdims=['segmentation_mask']).opts(visible=False)
+    print('Plotting segmentation')
     this_time = dataset.sel(time=time)
     lons = this_time.lon.data
     lats = this_time.lat.data
@@ -74,11 +92,14 @@ def plot_seg_mask(dataset, time, seg_selector, seg_tick):
         seg_mask = this_time.segmentation_mask_cell.data.compute()
     plot = gv.QuadMesh((lons, lats, seg_mask), kdims=['Longitude', 'Latitude'], vdims=['segmentation_mask']).opts(
         cmap='plasma', colorbar=False, tools=['hover'], visible=seg_tick)
+    print(f'Segmentation plot done for {time}')
     return plot
 
 
-def plot_sfc_obs(dataset, time, var_to_plot, sfc_tick, tfm):
-    tfm_time = tfm.sel(time=time, method='nearest')
+def plot_sfc_obs(dataset, time, var_to_plot, sfc_tick):
+    if not sfc_tick:
+        return gv.Points(([0], [0], [0], [0]), kdims=['Longitude', 'Latitude'], vdims=[var_to_plot, 'ID']).opts(visible=False)
+    print('Plotting obs')
     cells_of_interest = [2500, 3332, 3747]
     lower_time_bound = time - timedelta(hours=1)
     time = np.array([time]).astype('datetime64[us]')[0]
@@ -123,24 +144,51 @@ def plot_sfc_obs(dataset, time, var_to_plot, sfc_tick, tfm):
 
     if var_to_plot == 'dewpoint':
         plot = gv.Points((rec_i_want.longitude, rec_i_want.latitude, ((9/5)*(rec_i_want.dewpoint-273.15)+32), rec_i_want.stationId),
-                kdims=['longitude', 'latitude'], vdims=['dewpoint', 'ID']).opts(size=7, color='dewpoint', cmap='BrBG', clim=(60, 80), tools=['hover'])
+                kdims=['longitude', 'latitude'], vdims=['dewpoint', 'ID']).opts(size=7, color='dewpoint', cmap='BrBG', clim=(60, 80), tools=['hover'], line_color='black', selection_line_color='red')
     elif var_to_plot == 'temperature':
         plot = gv.Points((rec_i_want.longitude, rec_i_want.latitude, ((9/5)*(rec_i_want.temperature-273.15)+32), rec_i_want.stationId),
-                kdims=['longitude', 'latitude'], vdims=['temperature', 'ID']).opts(size=7, color='temperature', cmap='rainbow', clim=(50, 100), tools=['hover'])
+                kdims=['longitude', 'latitude'], vdims=['temperature', 'ID']).opts(size=7, color='temperature', cmap='rainbow', clim=(50, 100), tools=['hover'], line_color='black', selection_line_color='red')
     elif var_to_plot == 'u':
         raise NotImplementedError('Cannot plot wind barbs in bokeh')
     if not sfc_tick:
         plot = plot.opts(visible=False)
+    print(f'Obs plot done for {time}')
     return plot
+
+def handle_sfc_sel(index, this_time):
+    global selected_idx
+    selected_idx = index
+    global selected_time
+    selected_time = this_time
+
+
+def write_sfc_sel(_):
+    if path.exists('20220602-stations.csv'):
+        stations = pl.read_csv('20220602-stations.csv')
+    else:
+        stations = pl.DataFrame({'time': [''], 'index': ['']})
+    selected_idx_str = '.'.join([str(i) for i in selected_idx])
+    stations = pl.concat((stations, pl.DataFrame({'time': [selected_time.strftime('%Y%m%dT%H:%M:%S')], 'index': selected_idx_str})))
+    stations.write_csv('20220602-stations.csv')
 
 
 
 def plot_lma(dataset, time, var_to_plot, lma_tick):
-    lower_time_bound = time - timedelta(minutes=20)
+    if not lma_tick:
+        return gv.Points(([0], [0], [0]), kdims=['Longitude', 'Latitude'], vdims=[var_to_plot]).opts(visible=False)
+    lower_time_bound = time - timedelta(minutes=10)
     time = np.array([time]).astype('datetime64[us]')[0]
     lower_time_bound = np.array([lower_time_bound]).astype('datetime64[us]')[0]
     lma_i_want = dataset.where(((dataset.event_time <= time) & (dataset.event_time >= lower_time_bound) & (dataset.event_chi2 <= 1)).compute(), drop=True)
-    plot = gv.Points((lma_i_want.event_longitude.data, lma_i_want.event_latitude.data, lma_i_want[var_to_plot].data), kdims=['Longitude', 'Latitude'], vdims=[var_to_plot]).opts(cmap='magma', visible=lma_tick)
+    c_var = lma_i_want[var_to_plot].data.astype('float64')
+    cmin = c_var.min()
+    c_var = (c_var - cmin)/1e9
+    cmin = c_var.min()
+    cmax = c_var.max()
+    print(cmin, cmax)
+    plot = gv.Points((lma_i_want.event_longitude.data, lma_i_want.event_latitude.data, c_var), kdims=['Longitude', 'Latitude'], vdims=[var_to_plot]).opts(cmap='magma', color=var_to_plot,
+                                                                                                                                                          visible=lma_tick, clim=(cmin, cmax), tools=['hover'])
+    print(f'LMA plot done for {time}')
     return plot
 
 if __name__ == '__main__':
@@ -169,8 +217,8 @@ if __name__ == '__main__':
     dims_to_rm = list(madis_ds.dims)
     dims_to_rm.remove('recNum')
     madis_ds = madis_ds.drop_dims(dims_to_rm)
-    madis_ds['u'] = -madis_ds.windSpeed * np.sin(np.deg2rad(madis_ds.windDir))
-    madis_ds['v'] = -madis_ds.windSpeed * np.cos(np.deg2rad(madis_ds.windDir))
+    # madis_ds['u'] = -madis_ds.windSpeed * np.sin(np.deg2rad(madis_ds.windDir))
+    # madis_ds['v'] = -madis_ds.windSpeed * np.cos(np.deg2rad(madis_ds.windDir))
 
 
     lma = xr.open_dataset('/Volumes/LtgSSD/'+date_i_want.strftime('%B').lower()+date_i_want.strftime('/6sensor_minimum/LYLOUT_%y%m%d_000000_86400_map500m.nc'),
@@ -197,7 +245,8 @@ if __name__ == '__main__':
     
     seg_tick = pn.widgets.Checkbox(name='Show Segmentation')
     seg_sel = pn.widgets.Select(name='Grid Product', options=['Feature ID', 'Cell ID'], value='Cell ID')
-    seg = hv.DynamicMap(pn.bind(plot_seg_mask, tfm, date_slider, seg_sel, seg_tick))
+    seg_mask_func = partial(plot_seg_mask, dataset=tfm.copy())
+    seg = hv.DynamicMap(pn.bind(seg_mask_func, time=date_slider, seg_selector=seg_sel, seg_tick=seg_tick))
 
     radar_sel = pn.widgets.Select(name='Radar Product', options=['Reflectivity', 'RhoHV', 'ZDR'], value='Reflectivity')
     z_sel = pn.widgets.IntSlider(name='Radar Z Level', start=0, end=15000, step=500, value=0)
@@ -207,20 +256,26 @@ if __name__ == '__main__':
 
     sfc_tick = pn.widgets.Checkbox(name='Show Surface Obs', value=True)
     sfc_sel = pn.widgets.Select(name='Surface Obs Variable', options=['temperature', 'dewpoint'], value='dewpoint')
-    sfc = hv.DynamicMap(pn.bind(plot_sfc_obs, madis_ds, date_slider, sfc_sel, sfc_tick, tfm))
+    sfc = hv.DynamicMap(pn.bind(plot_sfc_obs, madis_ds, date_slider, sfc_sel, sfc_tick)).opts(tools=['lasso_select'])
+    sfc_lasso = hv.streams.Selection1D(source=sfc)
+    handle_sfc_sel_w_time = pn.bind(handle_sfc_sel, this_time=date_slider)
+    sfc_lasso.add_subscriber(handle_sfc_sel_w_time)
 
 
-    lma_tick = pn.widgets.Checkbox(name='Show LMA')
+    lma_tick = pn.widgets.Checkbox(name='Show LMA', value=True)
     lma_sel = pn.widgets.Select(name='LMA Variable', options=['event_time', 'event_power', 'event_altitude'], value='event_time')
     lma = hv.DynamicMap(pn.bind(plot_lma, lma, date_slider, lma_sel, lma_tick))
+
+    write_out_button = pn.widgets.Button(name='Write')
+    pn.bind(write_sfc_sel, write_out_button, watch=True)
 
     my_map = (gv.tile_sources.OSM *
               satellite.opts(alpha=0.85) *
               radar_mesh.opts(alpha=0.85) *
               seg.opts(alpha=0.5) *
               sfc.opts(alpha=0.5) *
-              lma
+              lma.opts(tools=['hover'])
               ).opts(width=800, height=800)
     col = pn.Row(pn.Column(date_slider, my_map), pn.Column(seg_sel, seg_tick, channel_select, satellite_tick, radar_sel, z_sel, radar_tick, sfc_sel, sfc_tick,
-                                                           lma_sel, lma_tick))
+                                                           lma_sel, lma_tick, write_out_button))
     pn.serve(col, port=5006, websocket_origin=['localhost:5006', '100.83.93.83:5006'])
