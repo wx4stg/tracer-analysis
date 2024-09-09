@@ -7,6 +7,7 @@ import panel as pn
 
 import numpy as np
 import xarray as xr
+from dask import array as da
 
 from goes2go import GOES
 
@@ -76,7 +77,9 @@ def plot_seg_mask(dataset, time, seg_selector, seg_tick):
     return plot
 
 
-def plot_sfc_obs(dataset, time, var_to_plot, sfc_tick):
+def plot_sfc_obs(dataset, time, var_to_plot, sfc_tick, tfm):
+    tfm_time = tfm.sel(time=time, method='nearest')
+    cells_of_interest = [2500, 3332, 3747]
     lower_time_bound = time - timedelta(hours=1)
     time = np.array([time]).astype('datetime64[us]')[0]
     lower_time_bound = np.array([lower_time_bound]).astype('datetime64[us]')[0]
@@ -84,6 +87,40 @@ def plot_sfc_obs(dataset, time, var_to_plot, sfc_tick):
     after = (dataset.observationTime.compute() >= lower_time_bound).compute()
     rec_i_want = dataset.where((before & after), drop=True)
     rec_i_want = rec_i_want.where(~np.isnan(rec_i_want[var_to_plot]).compute(), drop=True)
+    # Trajectory based filtering
+    # rec_mask = da.full_like(rec_i_want.recNum.data, False, dtype=bool)
+    # for i, rec_num in enumerate(rec_i_want.recNum.data):
+    #     station = rec_i_want.sel(recNum=rec_num)
+    #     stat_lon = station.longitude.data
+    #     stat_lat = station.latitude.data
+    #     stat_speed = station.windSpeed.data
+    #     if np.isnan(stat_speed):
+    #         rec_mask[i] = False
+    #         continue
+    #     stat_u = station.u.data
+    #     stat_v = station.v.data
+    #     grid_idx_x = np.argmin(np.abs(tfm.lon.data - stat_lon))
+    #     grid_idx_y = np.argmin(np.abs(tfm.lat.data - stat_lat))
+    #     station_x, station_y = tfm_time.x.isel(x=int(grid_idx_x)).data, tfm_time.y.isel(y=int(grid_idx_y)).data
+    #     hours_max = 3
+    #     distance_max = stat_speed * hours_max * 60 * 60
+    #     max_step = int(distance_max / stat_speed)
+    #     steps = np.arange(0, max_step)
+
+    #     u_norm = stat_u / stat_speed
+    #     v_norm = stat_v / stat_speed
+    #     xs = station_x + u_norm * steps
+    #     xs = np.clip(xs, tfm.x.min().data, tfm.y.max().data)
+
+    #     ys = station_y + v_norm * steps
+    #     ys = np.clip(ys, tfm.y.min().data, tfm.y.max().data)
+
+
+    #     too_close = (np.sqrt((tfm_time.x - station_x)**2 + (tfm_time.y - station_y)**2) < 3000)
+    #     segmentation_along_trajectory = tfm_time.segmentation_mask_cell.where(~too_close, np.nan).sel(x=xs, y=ys, method='nearest')
+    #     rec_mask[i] = np.any(np.isin(segmentation_along_trajectory.data, cells_of_interest))
+    # rec_i_want = rec_i_want.where(rec_mask.compute(), drop=True)
+
     if var_to_plot == 'dewpoint':
         plot = gv.Points((rec_i_want.longitude, rec_i_want.latitude, ((9/5)*(rec_i_want.dewpoint-273.15)+32), rec_i_want.stationId),
                 kdims=['longitude', 'latitude'], vdims=['dewpoint', 'ID']).opts(size=7, color='dewpoint', cmap='BrBG', clim=(60, 80), tools=['hover'])
@@ -129,8 +166,11 @@ if __name__ == '__main__':
         madis_ds = xr.open_mfdataset(madis_file, engine='netcdf4', chunks='auto', coords='minimal', concat_dim='recNum', combine='nested', compat='override')
     madis_ds = madis_ds.where(((madis_ds.longitude <= grid_max_lon) & (madis_ds.longitude >= grid_min_lon) & (madis_ds.latitude <= grid_max_lat) & (madis_ds.latitude >= grid_min_lat)).compute(), drop=True)
     madis_ds = madis_ds.where(np.logical_and(madis_ds.stationId != b'F5830', madis_ds.stationId != b'6114D').compute(), drop=True)
-    # madis_ds['u'] = -madis_ds.windSpeed * np.sin(np.deg2rad(madis_ds.windDir))
-    # madis_ds['v'] = -madis_ds.windSpeed * np.cos(np.deg2rad(madis_ds.windDir))
+    dims_to_rm = list(madis_ds.dims)
+    dims_to_rm.remove('recNum')
+    madis_ds = madis_ds.drop_dims(dims_to_rm)
+    madis_ds['u'] = -madis_ds.windSpeed * np.sin(np.deg2rad(madis_ds.windDir))
+    madis_ds['v'] = -madis_ds.windSpeed * np.cos(np.deg2rad(madis_ds.windDir))
 
 
     lma = xr.open_dataset('/Volumes/LtgSSD/'+date_i_want.strftime('%B').lower()+date_i_want.strftime('/6sensor_minimum/LYLOUT_%y%m%d_000000_86400_map500m.nc'),
@@ -167,7 +207,7 @@ if __name__ == '__main__':
 
     sfc_tick = pn.widgets.Checkbox(name='Show Surface Obs', value=True)
     sfc_sel = pn.widgets.Select(name='Surface Obs Variable', options=['temperature', 'dewpoint'], value='dewpoint')
-    sfc = hv.DynamicMap(pn.bind(plot_sfc_obs, madis_ds, date_slider, sfc_sel, sfc_tick))
+    sfc = hv.DynamicMap(pn.bind(plot_sfc_obs, madis_ds, date_slider, sfc_sel, sfc_tick, tfm))
 
 
     lma_tick = pn.widgets.Checkbox(name='Show LMA')
@@ -175,8 +215,8 @@ if __name__ == '__main__':
     lma = hv.DynamicMap(pn.bind(plot_lma, lma, date_slider, lma_sel, lma_tick))
 
     my_map = (gv.tile_sources.OSM *
-              radar_mesh.opts(alpha=0.85) *
               satellite.opts(alpha=0.85) *
+              radar_mesh.opts(alpha=0.85) *
               seg.opts(alpha=0.5) *
               sfc.opts(alpha=0.5) *
               lma
