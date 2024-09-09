@@ -5,7 +5,7 @@ import holoviews as hv
 import geoviews as gv
 import panel as pn
 
-import polars as pl
+import pandas as pd
 
 import numpy as np
 import xarray as xr
@@ -164,11 +164,11 @@ def handle_sfc_sel(index, this_time):
 
 def write_sfc_sel(_):
     if path.exists('20220602-stations.csv'):
-        stations = pl.read_csv('20220602-stations.csv')
+        stations = pd.read_csv('20220602-stations.csv')
     else:
-        stations = pl.DataFrame({'time': [''], 'index': ['']})
+        stations = pd.DataFrame({'time': [''], 'index': ['']})
     selected_idx_str = '.'.join([str(i) for i in selected_idx])
-    stations = pl.concat((stations, pl.DataFrame({'time': [selected_time.strftime('%Y%m%dT%H:%M:%S')], 'index': selected_idx_str})))
+    stations = pd.concat((stations, pd.DataFrame({'time': [selected_time.strftime('%Y%m%dT%H:%M:%S')], 'index': selected_idx_str})))
     stations.write_csv('20220602-stations.csv')
 
 
@@ -181,19 +181,79 @@ def plot_lma(dataset, time, var_to_plot, lma_tick):
     lower_time_bound = np.array([lower_time_bound]).astype('datetime64[us]')[0]
     lma_i_want = dataset.where(((dataset.event_time <= time) & (dataset.event_time >= lower_time_bound) & (dataset.event_chi2 <= 1)).compute(), drop=True)
     c_var = lma_i_want[var_to_plot].data.astype('float64')
-    cmin = c_var.min()
-    c_var = (c_var - cmin)/1e9
-    cmin = c_var.min()
-    cmax = c_var.max()
-    print(cmin, cmax)
+    cmin = 0
+    cmax = 1
+    if len(c_var) > 0:
+        cmin = c_var.min()
+        c_var = (c_var - cmin)/1e9
+        cmin = c_var.min()
+        cmax = c_var.max()
     plot = gv.Points((lma_i_want.event_longitude.data, lma_i_want.event_latitude.data, c_var), kdims=['Longitude', 'Latitude'], vdims=[var_to_plot]).opts(cmap='magma', color=var_to_plot,
                                                                                                                                                           visible=lma_tick, clim=(cmin, cmax), tools=['hover'])
     print(f'LMA plot done for {time}')
     return plot
 
+
+def plot_sounding_temperature(dataset, time, augmenter):
+    time = np.array([time]).astype('datetime64[s]')[0]
+    temps = dataset.skewed_T.data.copy()
+    aug_temp = augmenter[augmenter.index == time]['temperature'].values
+    if len(aug_temp) == 1:
+        temps[0] = aug_temp[0]
+    plot = hv.Curve((temps, dataset.pres.data), kdims=['Temperature'], vdims=['Pressure']).opts(ylabel='Pressure (hPa)', xlabel='Temperature (C)').opts(width=400, height=400, color='red')
+    plot = plot * hv.Points((temps[0], dataset.pres.data[0])).opts(color='red', size=10, line_color='black')
+    return plot
+
+
+def plot_sounding_dewpoint(dataset, time, augmenter):
+    time = np.array([time]).astype('datetime64[s]')[0]
+    dews = dataset.skewed_Td.data.copy()
+    aug_dew = augmenter[augmenter.index == time]['dewpoint'].values
+    if len(aug_dew) == 1:
+        dews[0] = aug_dew[0]
+    plot = hv.Curve((dews, dataset.pres.data), kdims=['Temperature'], vdims=['Pressure']).opts(width=400, height=400, color='green')
+    plot = plot * hv.Points((dews[0], dataset.pres.data[0])).opts(color='green', size=10, line_color='black')
+    return plot
+
+def plot_sounding_isotherms(dataset, values, temp_offset):
+    plot = None
+    for v in values:
+        temps = np.full_like(dataset.pres.data, v)
+        temps = temps + temp_offset
+        if plot is None:
+            plot = hv.Curve((temps, dataset.pres.data), kdims=['Temperature'], vdims=['Pressure']).opts(color='gray', alpha=0.5)
+        else:
+            plot = plot * hv.Curve((temps, dataset.pres.data), kdims=['Temperature'], vdims=['Pressure']).opts(color='gray', alpha=0.5)
+    return plot
+
+def avg_t_label(time, augmenter):
+    time = np.array([time]).astype('datetime64[s]')[0]
+    avg_temp = augmenter[augmenter.index == time]['temperature'].values
+    avg_dew = augmenter[augmenter.index == time]['dewpoint'].values
+    ml_cape = augmenter[augmenter.index == time]['mlcape'].values
+    ml_cinh = augmenter[augmenter.index == time]['mlcinh'].values
+    ml_ecape = augmenter[augmenter.index == time]['mlecape'].values
+    sb_cape = augmenter[augmenter.index == time]['sbcape'].values
+    sb_cinh = augmenter[augmenter.index == time]['sbcinh'].values
+    sb_ecape = augmenter[augmenter.index == time]['sbecape'].values
+    if len(avg_temp) == 1:
+        label_str =  f'### Continental Stations\n ### Avg T: {avg_temp[0]:.2f} C Avg Td: {avg_dew[0]:.2f} C'
+        label_str += f'\n ### Surface Based:\n### CAPE: {sb_cape[0]:.2f} J/kg CINH: {sb_cinh[0]:.2f} J/kg ECAPE: {sb_ecape[0]:.2f} J/kg'
+        label_str += f'\n### Mixed Layer:\n### CAPE: {ml_cape[0]:.2f} J/kg CINH: {ml_cinh[0]:.2f} J/kg ECAPE: {ml_ecape[0]:.2f} J/kg'
+        return label_str
+    return 'Avg T: N/A Avg Td: N/A'
+
+
 if __name__ == '__main__':
     date_i_want = dt(2022, 6, 2, 0, 0, 0)
     tfm = xr.open_dataset(f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/Track_features_merges_augmented2.zarr', engine='zarr', chunks='auto')
+    sounding = xr.open_dataset('armdata/housondewnpnS3.b1.20220602.173000.cdf').isel(time=slice(-1))
+    skew_angle = 30
+    P_bottom = np.max(sounding.pres.data)
+    temp_offset = 37*np.log10(P_bottom/sounding.pres.data)/np.tan(np.deg2rad(skew_angle))
+    sounding['skewed_T'] = sounding.tdry.data + temp_offset
+    sounding['skewed_Td'] = sounding.dp.data + temp_offset
+    augment_data = pd.read_csv('20220602-augment.csv', parse_dates=['time'], index_col='time')
 
     grid_max_lon = tfm.lon.max().compute()
     grid_min_lon = tfm.lon.min().compute()
@@ -217,8 +277,6 @@ if __name__ == '__main__':
     dims_to_rm = list(madis_ds.dims)
     dims_to_rm.remove('recNum')
     madis_ds = madis_ds.drop_dims(dims_to_rm)
-    # madis_ds['u'] = -madis_ds.windSpeed * np.sin(np.deg2rad(madis_ds.windDir))
-    # madis_ds['v'] = -madis_ds.windSpeed * np.cos(np.deg2rad(madis_ds.windDir))
 
 
     lma = xr.open_dataset('/Volumes/LtgSSD/'+date_i_want.strftime('%B').lower()+date_i_want.strftime('/6sensor_minimum/LYLOUT_%y%m%d_000000_86400_map500m.nc'),
@@ -266,6 +324,11 @@ if __name__ == '__main__':
     lma_sel = pn.widgets.Select(name='LMA Variable', options=['event_time', 'event_power', 'event_altitude'], value='event_time')
     lma = hv.DynamicMap(pn.bind(plot_lma, lma, date_slider, lma_sel, lma_tick))
 
+    sounding_T = hv.DynamicMap(pn.bind(plot_sounding_temperature, sounding, date_slider, augment_data))
+    sounding_Td = hv.DynamicMap(pn.bind(plot_sounding_dewpoint, sounding, date_slider, augment_data))
+    sounding_isotherms = plot_sounding_isotherms(sounding, np.arange(-110, 41, 10), temp_offset)
+    sounding_label = pn.pane.Markdown(pn.bind(avg_t_label, date_slider, augment_data))
+
     write_out_button = pn.widgets.Button(name='Write')
     pn.bind(write_sfc_sel, write_out_button, watch=True)
 
@@ -273,9 +336,11 @@ if __name__ == '__main__':
               satellite.opts(alpha=0.85) *
               radar_mesh.opts(alpha=0.85) *
               seg.opts(alpha=0.5) *
-              sfc.opts(alpha=0.5) *
+              sfc.opts(alpha=0.5, tools=['hover']) *
               lma.opts(tools=['hover'])
               ).opts(width=800, height=800)
-    col = pn.Row(pn.Column(date_slider, my_map), pn.Column(seg_sel, seg_tick, channel_select, satellite_tick, radar_sel, z_sel, radar_tick, sfc_sel, sfc_tick,
-                                                           lma_sel, lma_tick, write_out_button))
+    my_skewT = (sounding_isotherms * sounding_T * sounding_Td).opts(width=400, height=400, logy=True, xlim=(-40, 35), ylim=(1020, 100))
+    control_column = pn.Column(date_slider, seg_sel, seg_tick, channel_select, satellite_tick, radar_sel, z_sel, radar_tick, sfc_sel, sfc_tick,
+                                                           lma_sel, lma_tick, write_out_button)
+    col = pn.Row(pn.Column(my_map), pn.Column(my_skewT, sounding_label), control_column)
     pn.serve(col, port=5006, websocket_origin=['localhost:5006', '100.83.93.83:5006'])
