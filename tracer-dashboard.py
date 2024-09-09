@@ -21,6 +21,8 @@ from functools import partial
 
 import warnings
 
+import sys
+
 hv.extension('bokeh')
 
 selected_time = None
@@ -243,6 +245,13 @@ def avg_t_label(time, augmenter):
         return label_str
     return '### Avg T: N/A Avg Td: N/A'
 
+def cell_cloud_top_label(dataset, time):
+    time_i_want = np.array([time]).astype('datetime64[ns]')[0]
+    min_sats = dataset['min_L2-MCMIPC']
+    min_sats_filt = min_sats.where(((min_sats.time == time_i_want)), drop=True)
+    min_sats_singleval = min_sats_filt.mean().data.compute()
+    return f'### Avg Cell Cloud Temperature: {min_sats_singleval:.2f} K'
+
 def cell_cloud_top_plot(dataset, time):
     time_lower_bound = time - timedelta(hours=1)
     time_i_want = np.array([time]).astype('datetime64[ns]')[0]
@@ -251,8 +260,36 @@ def cell_cloud_top_plot(dataset, time):
     min_sats_filt = min_sats.where(((min_sats.time >= time_lower_bound) & (min_sats.time <= time_i_want)), drop=True)
     feat_2d, time_2d = np.meshgrid(min_sats_filt.feature.data, min_sats_filt.time.data)
     plot = hv.Scatter((time_2d.T.flatten(), min_sats_filt.data.flatten(), feat_2d.T.flatten()),
-           kdims=['Time'], vdims=['Channel 13 Brightness Minimum', 'Feature ID']).opts(color='Feature ID', cmap='viridis', xlim=(time_lower_bound, time_i_want), ylim=(220, 310))
+           kdims=['Time'], vdims=['Channel 13 Brightness Minimum', 'Feature ID']).opts(color='Feature ID', cmap='viridis', ylim=(220, 310),
+                                                                                       xlim=(time_lower_bound.astype('datetime64[s]'), time_i_want.astype('datetime64[s]')))
     return plot
+
+def flash_count_label(lma_ds, time):
+    lower_time_bound = time - timedelta(minutes=5)
+    time = np.array([time]).astype('datetime64[us]')[0]
+    lower_time_bound = np.array([lower_time_bound]).astype('datetime64[us]')[0]
+    lma_i_want = lma_ds.where(((lma_ds.flash_time_start <= time) & (lma_ds.flash_time_start >= lower_time_bound)).compute(), drop=True)
+    flash_count = lma_i_want.number_of_flashes.shape[0]
+    return f'### 5-min Flash Count: {flash_count}'
+
+
+# def flash_count_plot(dataset, time):
+#     time_lower_bound = time - timedelta(minutes=10)
+#     time_i_want = np.array([time]).astype('datetime64[ns]')[0]
+#     time_lower_bound = np.array([time_lower_bound]).astype('datetime64[ns]')[0]
+#     ds_filt = dataset.where(((dataset.time >= time_lower_bound) & (dataset.time <= time_i_want)).compute(), drop=True)
+#     time_index_start = np.argmin(np.abs(dataset.time.data - time_lower_bound))
+#     time_index_end = np.argmin(np.abs(dataset.time.data - time_i_want))
+#     ds_filt = ds_filt.where((ds_filt.feature_time_index >= time_index_start).compute(), drop=True)
+#     ds_filt = ds_filt.where((ds_filt.feature_time_index <= time_index_end).compute(), drop=True).compute()
+#     unique_time_indices = np.unique(ds_filt.feature_time_index.data).astype(int)
+#     unique_times = dataset.time.data[unique_time_indices]
+#     flash_counts = np.zeros_like(unique_time_indices)
+#     for i, time_idx in enumerate(np.unique(ds_filt.feature_time_index.data)):
+#         flash_counts[i] = ds_filt.where((ds_filt.feature_time_index == time_idx).compute(), drop=True).feature_flash_count.sum().compute()
+#     plot = hv.Scatter((unique_times, flash_counts), kdims=['Time'], vdims=['Flash Count']).opts(size=10, color='Flash Count', cmap='viridis')
+#     return plot
+
 
 
 if __name__ == '__main__':
@@ -319,7 +356,7 @@ if __name__ == '__main__':
 
     radar_sel = pn.widgets.Select(name='Radar Product', options=['Reflectivity', 'RhoHV', 'ZDR'], value='Reflectivity')
     z_sel = pn.widgets.IntSlider(name='Radar Z Level', start=0, end=15000, step=500, value=0)
-    radar_tick = pn.widgets.Checkbox(name='Show Radar')
+    radar_tick = pn.widgets.Checkbox(name='Show Radar', value=True)
     radar_mesh = hv.DynamicMap(pn.bind(plot_radar, radar, date_slider, radar_sel, z_sel, radar_tick))
 
 
@@ -333,14 +370,16 @@ if __name__ == '__main__':
 
     lma_tick = pn.widgets.Checkbox(name='Show LMA', value=True)
     lma_sel = pn.widgets.Select(name='LMA Variable', options=['event_time', 'event_power', 'event_altitude'], value='event_time')
-    lma = hv.DynamicMap(pn.bind(plot_lma, lma, date_slider, lma_sel, lma_tick))
+    lma_points = hv.DynamicMap(pn.bind(plot_lma, lma, date_slider, lma_sel, lma_tick))
 
     sounding_T = hv.DynamicMap(pn.bind(plot_sounding_temperature, sounding, date_slider, augment_data))
     sounding_Td = hv.DynamicMap(pn.bind(plot_sounding_dewpoint, sounding, date_slider, augment_data))
     sounding_isotherms = plot_sounding_isotherms(sounding, np.arange(-110, 41, 10), temp_offset)
     sounding_label = pn.pane.Markdown(pn.bind(avg_t_label, date_slider, augment_data))
 
-    cloud_top_plot = hv.DynamicMap(pn.bind(cell_cloud_top_plot, tfm, date_slider))
+    cloud_top_plot = pn.pane.Markdown(pn.bind(cell_cloud_top_label, tfm, date_slider))
+
+    flash_cnt_label = pn.pane.Markdown(pn.bind(flash_count_label, lma, date_slider))
 
     write_out_button = pn.widgets.Button(name='Write')
     pn.bind(write_sfc_sel, write_out_button, watch=True)
@@ -355,10 +394,22 @@ if __name__ == '__main__':
               radar_mesh.opts(alpha=0.85) *
               seg.opts(alpha=0.5, tools=['hover']) *
               sfc.opts(alpha=0.5, tools=['hover']) *
-              lma.opts(tools=['hover'])
+              lma_points.opts(tools=['hover'])
               ).opts(width=800, height=800, xlim=(xmin, xmax), ylim=(ymin, ymax))
     my_skewT = (sounding_isotherms * sounding_T * sounding_Td).opts(width=400, height=400, logy=True, xlim=(-40, 35), ylim=(1020, 100))
     control_column = pn.Column(date_slider, seg_sel, seg_tick, channel_select, satellite_tick, radar_sel, z_sel, radar_tick, sfc_sel, sfc_tick,
                                                            lma_sel, lma_tick, write_out_button)
-    col = pn.Row(pn.Column(my_map), pn.Column(my_skewT, sounding_label, pn.Row(cloud_top_plot)), control_column)
-    pn.serve(col, port=5006, websocket_origin=['localhost:5006', '100.83.93.83:5006'])
+    col = pn.Row(pn.Column(my_map), pn.Column(my_skewT, sounding_label, pn.Row(cloud_top_plot, flash_cnt_label)), control_column)
+    if '--anim' not in sys.argv:
+        pn.serve(col, port=5006, websocket_origin=['localhost:5006', '100.83.93.83:5006'])
+    else:
+        times_to_plot = augment_data.index
+        unique_times_np = np.unique(tfm.time.data).astype('datetime64[us]')
+        for i, time in enumerate(times_to_plot):
+            time = np.array([time]).astype('datetime64[us]')[0]
+            date_slider_index = np.argmin(np.abs(unique_times_np - time))
+            date_slider.value = unique_times[date_slider_index]
+            print(f'Plotting {date_slider.value}')
+            this_time_plot = pn.Row(pn.Column(date_slider, my_map), pn.Column(my_skewT, sounding_label, pn.Row(cloud_top_plot, flash_cnt_label)))
+            # save to PNG
+            this_time_plot.save(f'20220602/{str(i+1).zfill(4)}.png')
