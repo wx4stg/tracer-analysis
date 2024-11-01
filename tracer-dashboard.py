@@ -293,15 +293,15 @@ def flash_count_label(lma_ds, time):
 
 
 if __name__ == '__main__':
-    date_i_want = dt(2022, 6, 2, 0, 0, 0)
+    date_i_want = dt(2022, 6, 16, 0, 0, 0)
     tfm = xr.open_dataset(f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/Track_features_merges_augmented2.zarr', engine='zarr', chunks='auto')
-    sounding = xr.open_dataset('armdata/housondewnpnS3.b1.20220602.173000.cdf').isel(time=slice(-1))
-    skew_angle = 30
-    P_bottom = np.max(sounding.pres.data)
-    temp_offset = 37*np.log10(P_bottom/sounding.pres.data)/np.tan(np.deg2rad(skew_angle))
-    sounding['skewed_T'] = sounding.tdry.data + temp_offset
-    sounding['skewed_Td'] = sounding.dp.data + temp_offset
-    augment_data = pd.read_csv('20220602-augment.csv', parse_dates=['time'], index_col='time')
+    # sounding = xr.open_dataset('armdata/housondewnpnS3.b1.20220602.173000.cdf').isel(time=slice(-1))
+    # skew_angle = 30
+    # P_bottom = np.max(sounding.pres.data)
+    # temp_offset = 37*np.log10(P_bottom/sounding.pres.data)/np.tan(np.deg2rad(skew_angle))
+    # sounding['skewed_T'] = sounding.tdry.data + temp_offset
+    # sounding['skewed_Td'] = sounding.dp.data + temp_offset
+    # augment_data = pd.read_csv('20220602-augment.csv', parse_dates=['time'], index_col='time')
 
     grid_max_lon = tfm.lon.max().compute()
     grid_min_lon = tfm.lon.min().compute()
@@ -372,20 +372,20 @@ if __name__ == '__main__':
     lma_sel = pn.widgets.Select(name='LMA Variable', options=['event_time', 'event_power', 'event_altitude'], value='event_time')
     lma_points = hv.DynamicMap(pn.bind(plot_lma, lma, date_slider, lma_sel, lma_tick))
 
-    sounding_T = hv.DynamicMap(pn.bind(plot_sounding_temperature, sounding, date_slider, augment_data))
-    sounding_Td = hv.DynamicMap(pn.bind(plot_sounding_dewpoint, sounding, date_slider, augment_data))
-    sounding_isotherms = plot_sounding_isotherms(sounding, np.arange(-110, 41, 10), temp_offset)
-    sounding_label = pn.pane.Markdown(pn.bind(avg_t_label, date_slider, augment_data))
+    # sounding_T = hv.DynamicMap(pn.bind(plot_sounding_temperature, sounding, date_slider, augment_data))
+    # sounding_Td = hv.DynamicMap(pn.bind(plot_sounding_dewpoint, sounding, date_slider, augment_data))
+    # sounding_isotherms = plot_sounding_isotherms(sounding, np.arange(-110, 41, 10), temp_offset)
+    # sounding_label = pn.pane.Markdown(pn.bind(avg_t_label, date_slider, augment_data))
 
-    cloud_top_plot = pn.pane.Markdown(pn.bind(cell_cloud_top_label, tfm, date_slider))
+    # cloud_top_plot = pn.pane.Markdown(pn.bind(cell_cloud_top_label, tfm, date_slider))
 
-    flash_cnt_label = pn.pane.Markdown(pn.bind(flash_count_label, lma, date_slider))
+    # flash_cnt_label = pn.pane.Markdown(pn.bind(flash_count_label, lma, date_slider))
 
     write_out_button = pn.widgets.Button(name='Write')
     pn.bind(write_sfc_sel, write_out_button, watch=True)
 
-    lim_mins = (-98.6, 28)
-    lim_maxs = (-93.2, 32.5)
+    lim_mins = (-96.3, 28)
+    lim_maxs = (-91, 32.5)
     xmin, ymin = hv.util.transform.lon_lat_to_easting_northing(*lim_mins)
     xmax, ymax = hv.util.transform.lon_lat_to_easting_northing(*lim_maxs)
 
@@ -396,20 +396,24 @@ if __name__ == '__main__':
               sfc.opts(alpha=0.5, tools=['hover']) *
               lma_points.opts(tools=['hover'])
               ).opts(width=800, height=800, xlim=(xmin, xmax), ylim=(ymin, ymax))
-    my_skewT = (sounding_isotherms * sounding_T * sounding_Td).opts(width=400, height=400, logy=True, xlim=(-40, 35), ylim=(1020, 100))
+    # my_skewT = (sounding_isotherms * sounding_T * sounding_Td).opts(width=400, height=400, logy=True, xlim=(-40, 35), ylim=(1020, 100))
     control_column = pn.Column(date_slider, seg_sel, seg_tick, channel_select, satellite_tick, radar_sel, z_sel, radar_tick, sfc_sel, sfc_tick,
                                                            lma_sel, lma_tick, write_out_button)
-    col = pn.Row(pn.Column(my_map), pn.Column(my_skewT, sounding_label, pn.Row(cloud_top_plot, flash_cnt_label)), control_column)
+    col = pn.Row(pn.Column(my_map), control_column)
+    # col = pn.Row(pn.Column(my_map), pn.Column(my_skewT, sounding_label, pn.Row(cloud_top_plot, flash_cnt_label)), control_column)
     if '--anim' not in sys.argv:
         pn.serve(col, port=5006, websocket_origin=['localhost:5006', '100.83.93.83:5006'])
     else:
-        times_to_plot = augment_data.index
+        times_to_plot = tfm.time.where(((tfm.time > np.datetime64('2022-06-16T18:00:00')) & (tfm.time < np.datetime64('2022-06-16T19:30:00'))), drop=True).data
         unique_times_np = np.unique(tfm.time.data).astype('datetime64[us]')
         for i, time in enumerate(times_to_plot):
+            save_path = f'20220616/{str(i+1).zfill(4)}.png'
+            if path.exists(save_path):
+                continue
             time = np.array([time]).astype('datetime64[us]')[0]
             date_slider_index = np.argmin(np.abs(unique_times_np - time))
             date_slider.value = unique_times[date_slider_index]
             print(f'Plotting {date_slider.value}')
-            this_time_plot = pn.Row(pn.Column(date_slider, my_map), pn.Column(my_skewT, sounding_label, pn.Row(cloud_top_plot, flash_cnt_label)))
+            this_time_plot = pn.Column(date_slider, my_map, width=900, height=1000)
             # save to PNG
-            this_time_plot.save(f'20220602/{str(i+1).zfill(4)}.png')
+            this_time_plot.save(save_path)
