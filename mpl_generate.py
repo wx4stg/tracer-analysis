@@ -1,6 +1,7 @@
 from os import path, listdir, getcwd
 from datetime import datetime as dt, timedelta
 from pathlib import Path
+import warnings
 
 
 from goes2go import GOES
@@ -17,7 +18,125 @@ from matplotlib import use as mpl_use
 from cartopy import crs as ccrs
 from cartopy import feature as cfeat
 import cmweather
+
+
 from metpy.plots import USCOUNTIES
+from metpy import plots as mpplots
+from metpy import calc as mpcalc
+from metpy.interpolate import interpolate_to_grid
+from matplotlib.patheffects import withStroke
+
+
+lim_mins = (-98.3, 25.5)
+lim_maxs = (-91, 32)
+
+
+def plot_surface(madis_ds, time_i_want):
+    from metpy.units import units
+    cmweather.__version__
+    mpl_use('agg')
+    lower_time_bound = np.array([time_i_want-timedelta(hours=1)]).astype('datetime64[s]')[0]
+    upper_time_bound = np.array([time_i_want]).astype('datetime64[s]')[0]
+    before = (madis_ds.observationTime <= upper_time_bound)
+    after = (madis_ds.observationTime >= lower_time_bound)
+    rec_to_consider = madis_ds.where((before & after), drop=True)
+    df = rec_to_consider[['observationTime', 'stationId']].to_dataframe()
+    latest_records_idx = df.groupby('stationId')['observationTime'].idxmax()
+    latest_obs = rec_to_consider.sel(recNum=latest_records_idx)
+    dwpt = (latest_obs.dewpoint.data * units.degree_Kelvin).to(units.degF)
+    temp = (latest_obs.temperature.data * units.degree_Kelvin).to(units.degF)
+    baro = (latest_obs.stationPressure.data * units.Pa).to(units.hPa)
+    dir = latest_obs.windDir.data * units.degrees
+    spd = (latest_obs.windSpeed.data * units.meter / units.second).to(units.knots)
+    u, v = mpcalc.wind_components(spd, dir)
+    pe = [withStroke(linewidth=1, foreground="white")]
+    fig = plt.figure()
+    ax = plt.axes(projection=ccrs.epsg(3857))
+
+    stations = mpplots.StationPlot(ax, latest_obs.longitude, latest_obs.latitude, clip_on=True, transform=ccrs.PlateCarree(), fontsize=6)
+    stations.plot_parameter('NW', temp, path_effects=pe, fontsize=9, zorder=1, alpha=0.5)
+    stations.plot_parameter('SW', dwpt, path_effects=pe, fontsize=9, zorder=1, alpha=0.5)
+    stations.plot_parameter('NE', baro, path_effects=pe, fontsize=9, zorder=1, alpha=0.5)
+    stations.plot_barb(u, v, sizes={"emptybarb" : 0}, zorder=2)
+
+    ax.add_feature(USCOUNTIES.with_scale('5m'), edgecolor='gray', linewidth=0.5)
+    ax.add_feature(cfeat.COASTLINE.with_scale('10m'), edgecolor='gray', linewidth=0.5)
+    ax.set_extent([lim_mins[0], lim_maxs[0], lim_mins[1], lim_maxs[1]], crs=ccrs.PlateCarree())
+    px = 1/plt.rcParams['figure.dpi']
+    fig.set_size_inches(2048*px, 2048*px)
+    extent = ax.get_tightbbox(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
+    path_to_save = path.join('/Volumes','LtgSSD','analysis', 'mpl-generated', 'sfcwinds', f'{time_i_want.strftime("%Y%m%d_%H%M%S")}.png')
+    Path(path.dirname(path_to_save)).mkdir(parents=True, exist_ok=True)
+    fig.savefig(path_to_save, bbox_inches=extent, transparent=True)
+    print(path_to_save)
+    plt.close(fig)
+
+    grid_x, grid_y, u_grid = interpolate_to_grid(latest_obs.longitude.data, latest_obs.latitude.data, u, interp_type='barnes', hres=0.01,
+                                                boundary_coords={
+                                                    'south': lim_mins[1],
+                                                    'north': lim_maxs[1],
+                                                    'west': lim_mins[0],
+                                                    'east': lim_maxs[0]
+                                                })
+    _, _, v_grid = interpolate_to_grid(latest_obs.longitude.data, latest_obs.latitude.data, v, interp_type='barnes', hres=0.01,
+                                        boundary_coords={
+                                                'south': lim_mins[1],
+                                                'north': lim_maxs[1],
+                                                'west': lim_mins[0],
+                                                'east': lim_maxs[0]
+                                            })
+    wind_xarray = xr.Dataset({
+        'u' : xr.DataArray(u_grid.to('m/s'), dims=['latitude', 'longitude']),
+        'v' : xr.DataArray(v_grid.to('m/s'), dims=['latitude', 'longitude'])
+    }, coords={
+        'latitude': grid_y[:, 0],
+        'longitude': grid_x[0, :]
+    })
+    div = mpcalc.divergence(wind_xarray.u, wind_xarray.v).data.m
+    divmx = np.nanmax(np.abs(div.data))
+    divfig = plt.figure()
+    divax = plt.axes(projection=ccrs.epsg(3857))
+    divax.pcolormesh(grid_x, grid_y, div, cmap='balance', vmin=-divmx, vmax=divmx, transform=ccrs.PlateCarree())
+    divax.add_feature(cfeat.COASTLINE.with_scale('10m'), edgecolor='gray', linewidth=0.5)
+    divax.set_extent([lim_mins[0], lim_maxs[0], lim_mins[1], lim_maxs[1]], crs=ccrs.PlateCarree())
+    px = 1/plt.rcParams['figure.dpi']
+    divfig.set_size_inches(2048*px, 2048*px)
+    extent = divax.get_tightbbox(divfig.canvas.get_renderer()).transformed(divfig.dpi_scale_trans.inverted())
+    path_to_save = path.join('/Volumes','LtgSSD','analysis', 'mpl-generated', 'sfcdiv', f'{time_i_want.strftime("%Y%m%d_%H%M%S")}.png')
+    Path(path.dirname(path_to_save)).mkdir(parents=True, exist_ok=True)
+    divfig.savefig(path_to_save, bbox_inches=extent, transparent=True)
+    print(path_to_save)
+    plt.close(divfig)
+
+
+
+def queue_surface(times, date_i_want, client=None):
+    res = []
+    times = times.astype('datetime64[s]').astype(dt)
+    madis_file = path.join(path.sep, 'Volumes', 'LtgSSD', 'sfcdata_madis', date_i_want.strftime('%Y%m%d_*'))
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore')
+        madis_ds = xr.open_mfdataset(madis_file, chunks='auto', engine='netcdf4', coords='minimal', concat_dim='recNum', combine='nested', compat='override')
+    dims_to_rm = list(madis_ds.dims)
+    dims_to_rm.remove('recNum')
+    madis_ds = madis_ds.drop_dims(dims_to_rm)
+    vars_to_rm = list(madis_ds.data_vars)
+    vars_to_keep = ['latitude', 'longitude', 'observationTime', 'stationId', 'dewpoint', 'temperature', 'stationPressure', 'windSpeed', 'windDir']
+    [print(var) for var in vars_to_keep if var not in vars_to_rm]
+    [vars_to_rm.remove(var) for var in vars_to_keep]
+    madis_ds = madis_ds.drop_vars(vars_to_rm).compute()
+    lonmaxfilt = (madis_ds.longitude <= lim_maxs[0])
+    lonminfilt = (madis_ds.longitude >= lim_mins[0])
+    latmaxfilt = (madis_ds.latitude <= lim_maxs[1])
+    latminfilt = (madis_ds.latitude >= lim_mins[1])
+    madis_ds = madis_ds.where((lonmaxfilt & lonminfilt & latmaxfilt & latminfilt), drop=True)
+    for t in times:
+        if client is None:
+            plot_surface(madis_ds, t)
+        else:
+            res.append(client.submit(plot_surface, madis_ds, t, pure=False))
+    if client is not None:
+        return res
 
 
 def plot_satellite(path_to_read, this_time, min_x, max_x, min_y, max_y, channel_select):
@@ -44,8 +163,7 @@ def plot_satellite(path_to_read, this_time, min_x, max_x, min_y, max_y, channel_
     pcm = ax.pcolormesh(sat_lon, sat_lat, area_i_want[channel_select].data, cmap=cmap_to_use, transform=ccrs.PlateCarree())
     ax.add_feature(USCOUNTIES.with_scale('5m'), edgecolor='gray', linewidth=0.5)
     ax.add_feature(cfeat.COASTLINE.with_scale('10m'), edgecolor='gray', linewidth=0.5)
-    lim_mins = (-98.3, 25.5)
-    lim_maxs = (-91, 32)
+    
     ax.set_extent([lim_mins[0], lim_maxs[0], lim_mins[1], lim_maxs[1]], crs=ccrs.PlateCarree())
     px = 1/plt.rcParams['figure.dpi']
     fig.set_size_inches(2048*px, 2048*px)
@@ -131,8 +249,6 @@ def plot_radar(time, dataset_time, radar, var_to_plot):
     pcm = ax.pcolormesh(lons, lats, data2plot, cmap=cmap_to_use, vmin=vmin, vmax=vmax, transform=ccrs.PlateCarree())
     ax.add_feature(USCOUNTIES.with_scale('5m'), edgecolor='gray', linewidth=0.5)
     ax.add_feature(cfeat.COASTLINE.with_scale('10m'), edgecolor='gray', linewidth=0.5)
-    lim_mins = (-98.3, 25.5)
-    lim_maxs = (-91, 32)
     ax.set_extent([lim_mins[0], lim_maxs[0], lim_mins[1], lim_maxs[1]], crs=ccrs.PlateCarree())
     px = 1/plt.rcParams['figure.dpi']
     fig.set_size_inches(2048*px, 2048*px)
@@ -180,12 +296,16 @@ if __name__ == '__main__':
 
     radar_res = queue_radar(times, date_i_want, client)
     all_res.extend(radar_res)
+    
     sat_min_x = tfm.g16_scan_x.min().data.compute()
     sat_max_x = tfm.g16_scan_x.max().data.compute()
     sat_min_y = tfm.g16_scan_y.min().data.compute()
     sat_max_y = tfm.g16_scan_y.max().data.compute()
     sat_res = queue_satellite(times, date_i_want, sat_min_x, sat_max_x, sat_min_y, sat_max_y, client)
-
     all_res.extend(sat_res)
+
+    sfc_res = queue_surface(times, date_i_want, client)
+    all_res.extend(sfc_res)
+
     print('GATHERING!')
     client.gather(all_res)

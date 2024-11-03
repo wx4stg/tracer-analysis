@@ -30,6 +30,31 @@ hv.extension('bokeh')
 
 select_geoms = {}
 
+def plot_divergence(time, divergence_tick):
+    bnds = (lim_mins[0], lim_mins[1]+.09, lim_maxs[0], lim_maxs[1])
+    blank = gv.RGB((np.array([0, 1]), np.array([0, 1]), np.zeros((2,2)), np.zeros((2,2)), np.zeros((2,2)))).opts(visible=False)
+    if not divergence_tick:
+        return blank
+    path_to_image = path.join('/Volumes','LtgSSD','analysis', 'mpl-generated', 'sfcdiv', f'{time.strftime("%Y%m%d_%H%M%S")}.png')
+    if not path.exists(path_to_image):
+        return blank
+    plot = gv.RGB.load_image(path_to_image, bounds=bnds)
+    print(f'Divergence plot done for {time}')
+    return plot
+
+
+def plot_stations(time, station_tick):
+    bnds = (lim_mins[0], lim_mins[1]+.09, lim_maxs[0], lim_maxs[1])
+    blank = gv.RGB((np.array([0, 1]), np.array([0, 1]), np.zeros((2,2)), np.zeros((2,2)), np.zeros((2,2)))).opts(visible=False)
+    if not station_tick:
+        return blank
+    path_to_image = path.join('/Volumes','LtgSSD','analysis', 'mpl-generated', 'sfcwinds', f'{time.strftime("%Y%m%d_%H%M%S")}.png')
+    if not path.exists(path_to_image):
+        return blank
+    plot = gv.RGB.load_image(path_to_image, bounds=bnds)
+    print(f'Station plot done for {time}')
+    return plot
+
 def plot_satellite(time, channel_select, satellite_tick):
     bnds = (lim_mins[0], lim_mins[1]+.09, lim_maxs[0], lim_maxs[1])
     blank = gv.RGB((np.array([0, 1]), np.array([0, 1]), np.zeros((2,2)), np.zeros((2,2)), np.zeros((2,2)))).opts(visible=False)
@@ -144,6 +169,12 @@ if __name__ == '__main__':
     hou_tick = pn.widgets.Checkbox(name='Show THOU', value=False)
     radar_mesh_hou = hv.DynamicMap(pn.bind(plot_radar, 'THOU', date_slider, radar_sel, hou_tick))
 
+    stations_tick = pn.widgets.Checkbox(name='Show stations')
+    stations = hv.DynamicMap(pn.bind(plot_stations, date_slider, stations_tick))
+
+    div_tick = pn.widgets.Checkbox(name='Show divergence')
+    divergence = hv.DynamicMap(pn.bind(plot_divergence, date_slider, div_tick))
+
     polygon = gv.Polygons([]).opts(fill_alpha=0.3, fill_color='black')
     sfc_lasso = hv.streams.PolyDraw(source=polygon, drag=False, num_objects=1)
     handle_with_time = partial(handle_lasso, time=date_slider)
@@ -159,14 +190,17 @@ if __name__ == '__main__':
 
 
     my_map = (gv.tile_sources.OSM *
+              divergence.opts(alpha=0.85) *
               satellite.opts(alpha=0.85) *
               radar_mesh_hgx.opts(alpha=0.85) *
               radar_mesh_lch.opts(alpha=0.85) *
               radar_mesh_iah.opts(alpha=0.85) *
               radar_mesh_hou.opts(alpha=0.85) *
-              seg.opts(alpha=0.5, tools=['hover']) * polygon * lower_limit * eastern_limit
+              seg.opts(alpha=0.5, tools=['hover']) *
+              stations *
+              polygon * lower_limit * eastern_limit
               ).opts(width=2200, height=1200, xlim=(xmin, xmax), ylim=(ymin, ymax))
-    control_column = pn.Column(date_slider, seg_sel, seg_tick, channel_select, satellite_tick, radar_sel, hgx_tick, lch_tick, iah_tick, hou_tick, write_btn)
+    control_column = pn.Column(date_slider, seg_sel, seg_tick, channel_select, satellite_tick, radar_sel, hgx_tick, lch_tick, iah_tick, hou_tick, stations_tick, div_tick, write_btn)
     col = pn.Row(pn.Column(my_map), control_column)
 
 
