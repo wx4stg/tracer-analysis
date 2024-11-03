@@ -1,5 +1,7 @@
 {
     "name": "HDWX Cluster",
     "scheduler_port" : 8786,
-    "n_workers": 4
+    "n_workers": 12,
+    "threads_per_worker": 1,
+    "processes": true
 }
