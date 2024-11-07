@@ -20,7 +20,6 @@ from cartopy import feature as cfeat
 import cmweather
 
 
-from metpy.plots import USCOUNTIES
 from metpy import plots as mpplots
 from metpy import calc as mpcalc
 from metpy.interpolate import interpolate_to_grid
@@ -59,7 +58,6 @@ def plot_surface(madis_ds, time_i_want):
     stations.plot_parameter('NE', baro, path_effects=pe, fontsize=9, zorder=1, alpha=0.5)
     stations.plot_barb(u, v, sizes={"emptybarb" : 0}, zorder=2)
 
-    ax.add_feature(USCOUNTIES.with_scale('5m'), edgecolor='gray', linewidth=0.5)
     ax.add_feature(cfeat.COASTLINE.with_scale('10m'), edgecolor='gray', linewidth=0.5)
     ax.set_extent([lim_mins[0], lim_maxs[0], lim_mins[1], lim_maxs[1]], crs=ccrs.PlateCarree())
     px = 1/plt.rcParams['figure.dpi']
@@ -161,7 +159,6 @@ def plot_satellite(path_to_read, this_time, min_x, max_x, min_y, max_y, channel_
     fig = plt.figure()
     ax = plt.axes(projection=ccrs.epsg(3857))
     pcm = ax.pcolormesh(sat_lon, sat_lat, area_i_want[channel_select].data, cmap=cmap_to_use, transform=ccrs.PlateCarree())
-    ax.add_feature(USCOUNTIES.with_scale('5m'), edgecolor='gray', linewidth=0.5)
     ax.add_feature(cfeat.COASTLINE.with_scale('10m'), edgecolor='gray', linewidth=0.5)
     
     ax.set_extent([lim_mins[0], lim_maxs[0], lim_mins[1], lim_maxs[1]], crs=ccrs.PlateCarree())
@@ -202,7 +199,7 @@ def plot_radar(time, dataset_time, radar, var_to_plot):
     radar_files = [path.join(path_to_radar, f) for f in sorted(listdir(path_to_radar)) if f.startswith(radar)]
     radar_times = [dt.strptime(path.basename(f)[4:-4], '%Y%m%d_%H%M%S') for f in radar_files]
     ds_timedeltas = [abs(time - t) for t in radar_times]
-    if min(ds_timedeltas) > timedelta(minutes=15):
+    if len(ds_timedeltas) == 0 or min(ds_timedeltas) > timedelta(minutes=15):
         print('fail')
         return 0
     rdr = pyart.io.read(radar_files[np.argmin(ds_timedeltas)])
@@ -247,7 +244,6 @@ def plot_radar(time, dataset_time, radar, var_to_plot):
     fig = plt.figure()
     ax = plt.axes(projection=ccrs.epsg(3857))
     pcm = ax.pcolormesh(lons, lats, data2plot, cmap=cmap_to_use, vmin=vmin, vmax=vmax, transform=ccrs.PlateCarree())
-    ax.add_feature(USCOUNTIES.with_scale('5m'), edgecolor='gray', linewidth=0.5)
     ax.add_feature(cfeat.COASTLINE.with_scale('10m'), edgecolor='gray', linewidth=0.5)
     ax.set_extent([lim_mins[0], lim_maxs[0], lim_mins[1], lim_maxs[1]], crs=ccrs.PlateCarree())
     px = 1/plt.rcParams['figure.dpi']
