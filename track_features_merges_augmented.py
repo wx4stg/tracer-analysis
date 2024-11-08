@@ -56,20 +56,18 @@ def apply_coord_transforms(tfm):
 
 def generate_seg_mask_cell(tobac_data):
     tobac_data = tobac_data.copy()
-    print('Overwriting 0 in segmask with nan')
+    print('-Overwriting 0 in segmask with nan')
     tobac_data['segmentation_mask'] = xr.where(tobac_data.segmentation_mask == 0, np.nan, tobac_data.segmentation_mask.astype(np.float32))
-    feature_ids = tobac_data.feature.data.compute()
-    seg_data_feature = tobac_data.segmentation_mask.data.compute()
-    cell_ids = tobac_data.feature_parent_cell_id.sel(feature=feature_ids).data.compute()
+    feature_ids = tobac_data.feature.data
+    seg_data_feature = tobac_data.segmentation_mask.data
+    cell_ids = tobac_data.feature_parent_cell_id.sel(feature=feature_ids).data
     feature_to_cell_map = dict(zip(feature_ids, cell_ids))
     seg_data_cell = seg_data_feature.copy()
-    print('Mapping')
+    print('-Mapping')
     seg_data_cell = np.vectorize(feature_to_cell_map.get)(seg_data_cell)
-    print('Filtering')
-    seg_data_cell[seg_data_cell == None] = np.nan
-    print('Converting')
+    print('-Converting')
     seg_data_cell = seg_data_cell.astype(np.float32)
-    print('Saving')
+    print('-seg mask cell to xarray')
     tobac_data['segmentation_mask_cell'] = xr.DataArray(seg_data_cell, dims=('time', 'y', 'x'), coords={'time': tobac_data.time.data, 'y': tobac_data.y.data, 'x': tobac_data.x.data})
     return tobac_data
 
