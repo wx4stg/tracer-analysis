@@ -129,7 +129,7 @@ def write_json(_):
 
 if __name__ == '__main__':
     date_i_want = dt(2022, 6, 2, 0, 0, 0)
-    tfm = xr.open_dataset(f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/Track_features_merges_augmented2.zarr', engine='zarr', chunks='auto')
+    tfm = xr.open_dataset(f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/Track_features_merges_augmented.zarr', engine='zarr', chunks='auto')
     unique_times = np.unique(tfm.time.data).astype('datetime64[us]').astype(dt).tolist()
 
     grid_max_lon = tfm.lon.max().compute()
@@ -199,7 +199,7 @@ if __name__ == '__main__':
               seg.opts(alpha=0.5, tools=['hover']) *
               stations *
               polygon * lower_limit * eastern_limit
-              ).opts(width=2200, height=1200, xlim=(xmin, xmax), ylim=(ymin, ymax))
+              ).opts(width=1300, height=825, xlim=(xmin, xmax), ylim=(ymin, ymax))
     control_column = pn.Column(date_slider, seg_sel, seg_tick, channel_select, satellite_tick, radar_sel, hgx_tick, lch_tick, iah_tick, hou_tick, stations_tick, div_tick, write_btn)
     col = pn.Row(pn.Column(my_map), control_column)
 
