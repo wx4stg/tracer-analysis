@@ -43,8 +43,6 @@ def apply_coord_transforms(tfm):
     grid_g16_scan_y = grid_g16_scan_y.reshape(x2d.shape)
     tfm = tfm.assign({'g16_scan_x' : (('x', 'y'), grid_g16_scan_x), 'g16_scan_y' : (('x', 'y'), grid_g16_scan_y)})
 
-
-
     tfm.attrs['center_lat'] = radar_lat
     tfm.attrs['center_lon'] = radar_lon
 
@@ -57,10 +55,10 @@ def apply_coord_transforms(tfm):
 def generate_seg_mask_cell(tobac_data):
     tobac_data = tobac_data.copy()
     print('-Overwriting 0 in segmask with nan')
-    tobac_data['segmentation_mask'] = xr.where(tobac_data.segmentation_mask == 0, np.nan, tobac_data.segmentation_mask.astype(np.float32))
+    tobac_data['segmentation_mask'] = xr.where(tobac_data.segmentation_mask == 0, np.nan, tobac_data.segmentation_mask.astype(np.float32)).compute()
     feature_ids = tobac_data.feature.data
     seg_data_feature = tobac_data.segmentation_mask.data
-    cell_ids = tobac_data.feature_parent_cell_id.sel(feature=feature_ids).data
+    cell_ids = tobac_data.feature_parent_cell_id.sel(feature=feature_ids).data.compute()
     feature_to_cell_map = dict(zip(feature_ids, cell_ids))
     seg_data_cell = seg_data_feature.copy()
     print('-Mapping')
@@ -103,15 +101,16 @@ def add_eet_to_tobac_data(tfm, date_i_want):
     radar_dts = np.array(radar_dts).astype('datetime64[s]').astype(dt)
     radar_files = [path.join(radar_top_path, rf) for rf in radar_files if rf.endswith('.zarr')]
     all_feature_eet = xr.zeros_like(tfm.feature)
+    max_itr = len(tfm.feature.data)
     for i, feature_id in enumerate(tfm.feature.data):
-        print(feature_id)
+        print(f'-{100*(i/max_itr):.1f}%')
         this_feature = tfm.sel(feature=feature_id)
         this_feature_dt = this_feature.feature_time.data.compute().astype('datetime64[s]').item()
         radar_path_i_want = radar_files[np.argmin(np.abs(radar_dts - this_feature_dt))]
         radar = xr.open_dataset(radar_path_i_want, engine='zarr', chunks='auto')
         this_eet = radar.eet_sam.isel(time=0)
         this_seg_mask = this_feature.sel(time=this_feature_dt, method='nearest').segmentation_mask
-        feature_eet = np.nanmax(np.where(this_seg_mask.data == feature_id, this_eet, 0)).compute()
+        feature_eet = np.nanmax(np.where(this_seg_mask.data == feature_id, this_eet, 0))
         all_feature_eet[i] = feature_eet
     tfm['feature_echotop'] = all_feature_eet
     return tfm
@@ -128,7 +127,7 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want):
         print('>>>>>>>Unable to find timeseries data...>>>>>>>')
         return tobac_data
     timeseries_data = xr.open_dataset(tobac_timeseries_path, chunks='auto')
-    timeseries_data = timeseries_data.reindex(feature=tobac_data.feature.data.compute(), fill_value=np.nan)
+    timeseries_data = timeseries_data.reindex(feature=tobac_data.feature.data, fill_value=np.nan)
     for dv in timeseries_data.data_vars:
         if dv not in tobac_data.data_vars:
             tobac_data[dv] = timeseries_data[dv].copy()
@@ -138,6 +137,8 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want):
 def find_satellite_temp_for_feature(tfm_time, feature_i_want, area_i_want):
     # Find the index boundaries of the feature
     x_indices_valid, y_indices_valid = np.asarray(tfm_time.segmentation_mask == feature_i_want).nonzero()
+    if len(x_indices_valid) == 0:
+        return np.nan, np.nan, np.nan
     first_x_idx = np.min(x_indices_valid)
     first_y_idx = np.min(y_indices_valid)
     last_x_idx = np.max(x_indices_valid)
@@ -232,21 +233,26 @@ def add_goes_data_to_tobac_path(tfm):
         print(f'>>>>>>>Warning, long gap between {gap[0]} and {gap[1]}.>>>>>>>')
     
     max_iter = len(tfm.feature.data)
-    goes_max_x = tfm_time.g16_scan_x.max().data.item()
-    goes_min_x = tfm_time.g16_scan_x.min().data.item()
-    goes_max_y = tfm_time.g16_scan_y.max().data.item()
-    goes_min_y = tfm_time.g16_scan_y.min().data.item()
+    goes_max_x = tfm.g16_scan_x.max().data.item()
+    goes_min_x = tfm.g16_scan_x.min().data.item()
+    goes_max_y = tfm.g16_scan_y.max().data.item()
+    goes_min_y = tfm.g16_scan_y.min().data.item()
     padding = .001
     goes_xsclice = slice(goes_min_x-padding, goes_max_x+padding)
     goes_yslice = slice(goes_max_y+padding, goes_min_y-padding)
     for i, feat_id in enumerate(tfm.feature.data):
         this_feat = tfm.sel(feature=feat_id)
-        this_feat_time_dt = tfm_time.time.data.astype("datetime64[s]").astype(dt)
-        print(f'({100*(i/max_iter):.1f}%) {this_feat_time_dt.strftime('%Y-%m-%d %H:%M:%S')}')
-        this_feature_time_idx = tfm.feature_time_index
+        this_feature_time_idx = this_feat.feature_time_index.data.compute().item()
         tfm_time = this_feat.isel(time=this_feature_time_idx)
+        this_feat_time_dt = tfm_time.time.data.astype("datetime64[s]").astype(dt).item()
+        print(this_feat_time_dt)
+        print(f'({100*(i/max_iter):.1f}%) {this_feat_time_dt.strftime('%Y-%m-%d %H:%M:%S')}')
         # Load satellite data for this index
+        if this_feature_time_idx not in download_results['tobac_idx'].values:
+            print(f'>>>>>>>Warning, no satellite data for {this_feat_time_dt}>>>>>>>')
+            continue
         goes_file_path = download_results[download_results['tobac_idx'] == this_feature_time_idx]['file'].values[0]
+        goes_file_path = path.join('/Volumes/LtgSSD/', goes_file_path)
         satellite_data = xr.open_dataset(goes_file_path, chunks='auto').load()
         area_i_want = satellite_data.sel(y=goes_yslice, x=goes_xsclice)
         this_min_sat_temp, this_mean_sat_temp, this_std_sat_temp = find_satellite_temp_for_feature(tfm_time, feat_id, area_i_want)
