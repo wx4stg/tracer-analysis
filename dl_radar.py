@@ -1,5 +1,7 @@
 import nexradaws
-# import pyart
+from glob import glob
+import sys
+from datetime import datetime as dt
 from os import path
 from pathlib import Path
 from datetime import datetime as dt, timedelta
@@ -7,11 +9,14 @@ conn = nexradaws.NexradAwsInterface()
 
 
 if __name__ == '__main__':
-    start = dt(2022, 6, 2, 11, 0, 0)
-    end = start + timedelta(hours=18)
+    start = dt.strptime(sys.argv[1], '%Y%m%d%H%M')
+    end = start + timedelta(hours=int(sys.argv[2]))
 
     scans = conn.get_avail_scans_in_range(start, end, 'KHGX')
     scans = [scan for scan in scans if 'MDM' not in scan.filename and not scan.filename.endswith('j')]
     target = f'/Volumes/LtgSSD/nexrad_l2/{start.strftime("%Y%m%d")}'
+    already_downloaded = glob(f'{target}/*')
+    already_downloaded = [path.basename(adl) for adl in already_downloaded]
+    scans = [scan for scan in scans if scan.filename not in already_downloaded]
     Path(target).mkdir(parents=True, exist_ok=True)
     conn.download(scans, target)
