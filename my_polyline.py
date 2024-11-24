@@ -1,5 +1,6 @@
 from os import path, listdir
 from datetime import datetime as dt, timedelta
+import sys
 
 import holoviews as hv
 import geoviews as gv
@@ -128,7 +129,7 @@ def write_json(_):
     select_geoms = {}
 
 if __name__ == '__main__':
-    date_i_want = dt(2022, 6, 2, 0, 0, 0)
+    date_i_want = dt.strptime(sys.argv[1], '%Y%m%d')
     tfm = xr.open_dataset(f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/Track_features_merges_augmented.zarr', engine='zarr', chunks='auto')
     unique_times = np.unique(tfm.time.data).astype('datetime64[us]').astype(dt).tolist()
 

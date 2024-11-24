@@ -2,7 +2,7 @@ from os import path, listdir, getcwd
 from datetime import datetime as dt, timedelta
 from pathlib import Path
 import warnings
-
+import sys
 
 from goes2go import GOES
 from pyxlma import coords
