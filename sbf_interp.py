@@ -3,41 +3,40 @@
 import geopandas as gpd
 import xarray as xr
 from datetime import datetime as dt
-from os import path
 import numpy as np
 from matplotlib.path import Path
-from scipy.interpolate import interp1d
+from shapely.geometry import Polygon
 from pyxlma import coords
 import sys
 
+from numba import njit
 
-def interp_seabreeze_times(all_seabreezes, seabreeze_indices, seabreeze_times_num, zero_indices, zero_times_num):
-    all_seabreezes = all_seabreezes.copy()
-    # Interpolation: loop through each grid point (lat, lon) and interpolate over time
-    for lat_idx in range(all_seabreezes.shape[0]):
-        for lon_idx in range(all_seabreezes.shape[1]):
-            # Get the seabreeze field values at valid times for this (lat, lon) grid point
-            seabreeze_values = all_seabreezes[lat_idx, lon_idx, seabreeze_indices]
-            
-            # Skip interpolation if all values are zero
-            if np.all(seabreeze_values == -2):
-                continue
-            
-            # Create interpolator for the seabreeze field values based on actual times
-            interpolator = interp1d(
-                seabreeze_times_num,
-                seabreeze_values,
-                kind='linear',
-                bounds_error=False,
-                fill_value=-2  # You can choose another fill method if appropriate
-            )
-            
-            # Interpolate for missing times (all-zero slices)
-            interpolated_values = interpolator(zero_times_num)
-            
-            # Update all_seabreezes with interpolated values at zero_indices
-            all_seabreezes[lat_idx, lon_idx, zero_indices] = interpolated_values
-    return all_seabreezes
+@njit
+def interpolate_sbf_polygons(longer_polyline, shorter_polyline, times_i_want_between_float, last_time_float, this_time_float, later_is_longer):
+    interpolated_polys = np.zeros((longer_polyline.shape[0], 2, times_i_want_between_float.shape[0]))
+    # Pair each vertex of the longer polyline with the closest vertex of the shorter polyline
+    for i in range(longer_polyline.shape[0]):
+        # Find distance between this point and all points in the shorter polyline
+        this_point = longer_polyline[i, :]
+        distances = (np.sum(((shorter_polyline - this_point)**2), axis=1))**(0.5)
+        # Pair this point with the closest point in the shorter polyline
+        point_pair = np.argmin(distances)
+        matching_point = shorter_polyline[point_pair, :]
+        # Interpolate so that the point moves from the "this point" (aka, longer polyline) to the "matching point" (aka, shorter polyline)
+        moving_x = this_point[0] + (times_i_want_between_float - last_time_float) * (matching_point[0] - this_point[0]) / (this_time_float - last_time_float)
+        moving_y = this_point[1] + (times_i_want_between_float - last_time_float) * (matching_point[1] - this_point[1]) / (this_time_float - last_time_float)
+        point_in_motion = np.empty((2, moving_x.shape[0]))
+        point_in_motion[0, :] = moving_x
+        point_in_motion[1, :] = moving_y
+        # If the longer polygon is later in time, flip the motion of the point so that it moves from "previous time" to "now"
+        if later_is_longer:
+            interpolated_polys[i, :, :] = point_in_motion[:, ::-1]
+        else:
+            interpolated_polys[i, :, :] = point_in_motion
+    # Duplicate the first point of the interpolated polygon to the last point so that it's a closed polygon
+    interpolated_polys_repeat = np.concatenate((interpolated_polys, interpolated_polys[0:1, :, :]), axis=0)
+    return interpolated_polys_repeat
+
 
 if __name__ == '__main__':
     date_i_want = sys.argv[1]
@@ -46,15 +45,57 @@ if __name__ == '__main__':
     tfm = xr.open_dataset(tfm_path, engine='zarr', chunks='auto')
     polyline_path = f'/Volumes/LtgSSD/analysis/sam_polyline/{date_i_want.strftime("%Y-%m-%d")}.json'
     polyline = gpd.read_file(polyline_path)
+    polyline = polyline.set_index('index')
 
+    seabreeze_indices = np.where(np.isin(tfm.time.data.astype('datetime64[s]').astype(dt), polyline.index.values))
+    times_i_have = tfm.time.data[seabreeze_indices].copy()
+    times_i_want = tfm.time.data.copy()
+    times_i_want = times_i_want[(times_i_want > times_i_have[0]) & (times_i_want < times_i_have[-1])]
+
+    print('Interpolating polygons')
+    for i, this_time in enumerate(times_i_have[1:]):
+        # Get times in a whole bunch of different formats
+        this_time_dt = this_time.astype('datetime64[s]').astype(dt)
+        this_time_float = this_time.astype(float)
+        last_time = times_i_have[i]
+        last_time_dt = last_time.astype('datetime64[s]').astype(dt)
+        last_time_float = last_time.astype(float)
+        
+        # Find desired times that are between this_time and last_time
+        times_i_want_between = times_i_want[(times_i_want > last_time) & (times_i_want < this_time)]
+        times_i_want_between_dt = times_i_want_between.astype('datetime64[s]').astype(dt)
+        times_i_want_between_float = times_i_want_between.astype(float)
+
+        # Get coordinates of this polyline and the last polyline
+        this_polyline = polyline[polyline.index == this_time_dt]['geometry'].values[0]
+        this_polyline_coords = np.array(this_polyline.exterior.coords)[:-1, :]
+        last_polyline = polyline[polyline.index == last_time_dt]['geometry'].values[0]
+        last_polyline_coords = np.array(last_polyline.exterior.coords)[:-1, :]
+        
+        # Determine which polyline has more vertices
+        later_is_longer = False
+        if this_polyline_coords.shape[0] >= last_polyline_coords.shape[0]:
+            longer_polyline = this_polyline_coords
+            shorter_polyline = last_polyline_coords
+            later_is_longer = True
+        else:
+            longer_polyline = last_polyline_coords
+            shorter_polyline = this_polyline_coords
+        
+        
+        interpolated_polys = interpolate_sbf_polygons(longer_polyline, shorter_polyline, times_i_want_between_float, last_time_float, this_time_float, later_is_longer)
+        for ti, t in enumerate(times_i_want_between_dt):
+            this_interp_poly = interpolated_polys[:, :, ti]
+            interp_poly_shape = Polygon(this_interp_poly)
+            polyline.loc[t, 'geometry'] = interp_poly_shape
+
+
+    start_time = np.min(polyline.index.values)
+    end_time = np.max(polyline.index.values)
     lon_wide_1d = np.arange(-98.3, -91+.005, .01)
     lat_wide_1d = np.arange(25.5, 30+.005, .01)
     lon_wide, lat_wide = np.meshgrid(lon_wide_1d, lat_wide_1d)
-    all_seabreezes_wide = np.full((lon_wide.shape[0], lon_wide.shape[1], tfm.time.shape[0]), -2, dtype='float32')
-    seabreeze_indices = []
-    seabreeze_times = []
-    zero_indices = []
-    zero_times = []
+    all_seabreezes_wide = np.full((lon_wide.shape[0], lon_wide.shape[1], tfm.time.shape[0]), -2, dtype=int)
 
     radar_lat, radar_lon = tfm.attrs['center_lat'], tfm.attrs['center_lon']
     tpcs = coords.TangentPlaneCartesianSystem(ctrLat=radar_lat, ctrLon=radar_lon, ctrAlt=0)
@@ -67,34 +108,26 @@ if __name__ == '__main__':
 
     tfm = tfm.assign({'lat' : (('x', 'y'), grid_lat), 'lon' : (('x', 'y'), grid_lon)})
 
-    all_seabreezes_ds = xr.full_like(tfm.segmentation_mask, -2)
+    all_seabreezes_ds = xr.full_like(tfm.segmentation_mask, -2).astype(int)
+    print('Gridding...')
     for i, time in enumerate(tfm.time.data):
+        if time < start_time or time > end_time:
+            continue
         this_seabreeze = np.zeros_like(lon_wide)
         time_dt = np.array(time).astype('datetime64[s]').astype(dt).item()
-        if time_dt in polyline['index'].values.astype(dt):
-            seabreeze_indices.append(i)
-            seabreeze_times.append(time)
-            this_polyline = polyline[polyline['index'] == time_dt]['geometry'].values[0]
+        if time_dt in polyline.index.values.astype(dt):
+            this_polyline = polyline[polyline.index == time_dt]['geometry'].values[0]
             this_polyline_mpl = Path(np.array(this_polyline.exterior.coords))
             this_seabreeze = this_polyline_mpl.contains_points(np.array([lon_wide.flatten(), lat_wide.flatten()]).T).reshape(lon_wide.shape)
             all_seabreezes_wide[:, :, i] = this_seabreeze.astype('float32') - 2
             this_seabreeze_ds = this_polyline_mpl.contains_points(np.array([grid_lon.flatten(), grid_lat.flatten()]).T).reshape(grid_lon.shape)
             all_seabreezes_ds[i, :, :] = this_seabreeze_ds.astype('float32') - 2
         else:
-            zero_indices.append(i)
-            zero_times.append(time)
-    seabreeze_indices = np.array(seabreeze_indices)
-    seabreeze_times = np.array(seabreeze_times)
-    zero_indices = np.array(zero_indices)
-    zero_times = np.array(zero_times)
+            raise ValueError(f'No polyline for {time_dt}')
 
-    # Convert seabreeze_times and zero_times to numeric for interpolation
-    seabreeze_times_num = seabreeze_times.astype('float64')
-    zero_times_num = zero_times.astype('float64')
-
-    interp_wide = interp_seabreeze_times(all_seabreezes_wide, seabreeze_indices, seabreeze_times_num, zero_indices, zero_times_num).astype('float32')
+    print('Saving wide dataset...')
     wide_ds = xr.DataArray(
-        interp_wide,
+        all_seabreezes_wide,
         dims=('latitude', 'longitude', 'time'),
         coords={'latitude': lat_wide_1d, 'longitude': lon_wide_1d, 'time': tfm.time}
     ).to_dataset(name='seabreeze')
@@ -102,22 +135,24 @@ if __name__ == '__main__':
     enc = {var: comp for var in wide_ds.data_vars if not np.issubdtype(wide_ds[var].dtype, str)}
     wide_ds.to_netcdf(polyline_path.replace('.json', '_seabreeze.nc').replace('sam_polyline/', 'sam_sbf/'), encoding=enc)
 
-    all_seabreezes_ds = interp_seabreeze_times(all_seabreezes_ds.T.compute(), seabreeze_indices, seabreeze_times_num, zero_indices, zero_times_num).T.astype('float32')
-
     tfm['seabreeze'] = all_seabreezes_ds
-
-    feature_seabreeze = xr.zeros_like(tfm.feature)
+    print('Identifying features...')
+    feature_seabreeze = xr.zeros_like(tfm.feature, dtype=int)
     cell_seabreeze = np.zeros_like(np.meshgrid(tfm.cell, tfm.time))
     for i, feat_id in enumerate(tfm.feature.data):
+        print(f'{(i+1)/len(tfm.feature.data)*100:.2f}%')
         this_feat = tfm.sel(feature=feat_id)
-        this_feat_lon = this_feat.feature_lon.compute()
-        this_feat_lat = this_feat.feature_lat.compute()
-        ll_dist = ((tfm.lon - this_feat_lon)**2 + (tfm.lat - this_feat_lat)**2)**(0.5)
-        ll_dist_min = np.unravel_index(np.argmin(ll_dist.data.flatten()), ll_dist.shape)
-        this_feat_time_index = this_feat.feature_time_index.data.compute().item()
-        closest_seabreeze = tfm.seabreeze.isel(time=this_feat_time_index)[ll_dist_min]
-        feature_seabreeze[i] = closest_seabreeze
+        this_feat_time_idx = this_feat.feature_time_index.data.compute().item()
+        this_feat_time = tfm.time.data[this_feat_time_idx].astype('datetime64[s]').astype(dt)
+        if this_feat_time < start_time or this_feat_time > end_time:
+            continue
+        this_feat_lon = this_feat.feature_lon.data.compute().item()
+        this_feat_lat = this_feat.feature_lat.data.compute().item()
+        this_polyline = polyline[polyline.index.values == this_feat_time]['geometry'].values[0]
+        this_polyline_mpl = Path(np.array(this_polyline.exterior.coords))
+        this_seabreeze = int(this_polyline_mpl.contains_point((this_feat_lon, this_feat_lat))) - 2
+        feature_seabreeze.data[i] = this_seabreeze
 
     tfm['feature_seabreeze'] = feature_seabreeze
-
+    print('Saving zarr...')
     tfm.chunk('auto').to_zarr(tfm_path.replace('Track_features_merges_augmented.zarr', 'seabreeze.zarr'))
