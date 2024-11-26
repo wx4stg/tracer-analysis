@@ -157,4 +157,5 @@ if __name__ == '__main__':
     print('Saving zarr...')
     tfm.chunk('auto').to_zarr(tfm_path.replace('Track_features_merges_augmented.zarr', 'seabreeze.zarr'))
 
+    polyline = polyline.sort_index()
     polyline.to_file(polyline_path.replace('.json', '_interpolated.json'), driver='GeoJSON')
