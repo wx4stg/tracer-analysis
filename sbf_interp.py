@@ -121,7 +121,7 @@ if __name__ == '__main__':
             this_seabreeze = this_polyline_mpl.contains_points(np.array([lon_wide.flatten(), lat_wide.flatten()]).T).reshape(lon_wide.shape)
             all_seabreezes_wide[:, :, i] = this_seabreeze.astype('float32') - 2
             this_seabreeze_ds = this_polyline_mpl.contains_points(np.array([grid_lon.flatten(), grid_lat.flatten()]).T).reshape(grid_lon.shape)
-            all_seabreezes_ds[i, :, :] = this_seabreeze_ds.astype('float32') - 2
+            all_seabreezes_ds[i, :, :] = (this_seabreeze_ds.astype('float32') - 2).T
         else:
             raise ValueError(f'No polyline for {time_dt}')
 
