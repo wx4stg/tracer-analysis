@@ -17,7 +17,7 @@ from numba import njit
 
 
 @njit
-def identify_side_jit(dts, lons, lats, tfm_times, seabreeze, grid_lon, grid_lat):
+def identify_side(dts, lons, lats, tfm_times, seabreeze, grid_lon, grid_lat):
     seabreezes = np.zeros(lons.shape)
     for i in np.arange(seabreezes.shape[0]):
         lon = lons[i]
@@ -31,17 +31,6 @@ def identify_side_jit(dts, lons, lats, tfm_times, seabreeze, grid_lon, grid_lat)
         closest_col_idx = dist_idx_raveled % grid_lon.shape[1]
         closest_seabreeze = seabreeze[closest_time_idx, closest_row_idx, closest_col_idx]
         seabreezes[i] = closest_seabreeze
-    return seabreezes
-
-
-def identify_side(dts, lons, lats, tfm):
-    seabreezes = []
-    for lon, lat, this_dt in zip(lons, lats, dts):
-        tfm_time = tfm.sel(time=this_dt, method='nearest')
-        distance = (((tfm_time.lon - lon)**2 + (tfm_time.lat - lat)**2)**0.5)
-        dist_idx = np.unravel_index(distance.argmin().compute(), distance.shape)
-        closest_seabreeze = tfm_time.seabreeze.transpose(*tfm_time.lat.dims).data[dist_idx].compute()
-        seabreezes.append(closest_seabreeze)
     return seabreezes
 
 
@@ -75,22 +64,27 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
     arm_sonde_files = np.array([path.join(arm_sonde_path, f) for f in arm_sonde_files])
     arm_day_filter = np.where((arm_sonde_dts >= time_start_this_day) & (arm_sonde_dts <= time_end_this_day))[0]
     arm_sonde_files_this_day = arm_sonde_files[arm_day_filter]
-    arm_sonde_dts_this_day = arm_sonde_dts[arm_day_filter]
-    arm_sonde_lons = []
-    arm_sonde_lats = []
+    if len(arm_sonde_files) > 0:
+        arm_sonde_dts_this_day = arm_sonde_dts[arm_day_filter]
+        arm_sonde_lons = []
+        arm_sonde_lats = []
 
-    for sonde_file in arm_sonde_files_this_day:
-        tmp_sonde = xr.open_dataset(sonde_file)
-        arm_sonde_lons.append(tmp_sonde.lon.data[0])
-        arm_sonde_lats.append(tmp_sonde.lat.data[0])
-        tmp_sonde.close()
+        for sonde_file in arm_sonde_files_this_day:
+            tmp_sonde = xr.open_dataset(sonde_file)
+            arm_sonde_lons.append(tmp_sonde.lon.data[0])
+            arm_sonde_lats.append(tmp_sonde.lat.data[0])
+            tmp_sonde.close()
 
-    arm_sonde_lons = np.array(arm_sonde_lons)
-    arm_sonde_lats = np.array(arm_sonde_lats)
+        arm_sonde_lons = np.array(arm_sonde_lons)
+        arm_sonde_lats = np.array(arm_sonde_lats)
 
-    arm_sonde_sbf_side = identify_side(arm_sonde_dts_this_day, arm_sonde_lons, arm_sonde_lats, tfm)
-    # arm_sonde_sbf_side = identify_side_oneatatime(arm_sonde_dts_this_day, arm_sonde_lons, arm_sonde_lats, tfm.time.data.compute(),
-    #                                               tfm.seabreeze.transpose(*tfm.lat.dims).data.compute(), tfm.lon.data.compute(), tfm.lat.data.compute())
+        arm_sonde_sbf_side = identify_side(arm_sonde_dts_this_day.astype('datetime64[s]').astype(float), arm_sonde_lons, arm_sonde_lats, tfm.time.compute().data.astype('datetime64[s]').astype(float),
+                                                    tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.compute().data, tfm.lat.compute().data)        
+    else:
+        print('Warning, no ARM sondes found!')
+        arm_sonde_files_this_day = np.empty(0, dtype=str)
+        arm_sonde_dts_this_day = np.empty(0, dtype='datetime64[s]')
+        arm_sonde_sbf_side = np.empty(0, dtype=int)
 
     # Load the TAMU sondes
     tamu_sonde_path = '/Volumes/LtgSSD/TAMU_SONDES/'
@@ -99,24 +93,29 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
     tamu_sonde_files = np.array([path.join(tamu_sonde_path, f) for f in tamu_sonde_files])
     tamu_day_filter = np.where((tamu_sonde_dts >= time_start_this_day) & (tamu_sonde_dts <= time_end_this_day))[0]
     tamu_sonde_files_this_day = tamu_sonde_files[tamu_day_filter]
-    tamu_sonde_dts_this_day = tamu_sonde_dts[tamu_day_filter]
+    if len(tamu_sonde_files_this_day) > 0:
+        tamu_sonde_dts_this_day = tamu_sonde_dts[tamu_day_filter]
+        tamu_sonde_files_split = np.vstack(np.char.split(tamu_sonde_files_this_day, sep='_'))
+        tamu_sonde_lons = tamu_sonde_files_split[:, -3]
+        lon_negative = ((np.char.find(tamu_sonde_lons, 'W') >= 0).astype(int) - 0.5) * -2
+        tamu_sonde_lons = np.char.replace(tamu_sonde_lons, 'W', '')
+        tamu_sonde_lons = np.char.replace(tamu_sonde_lons, 'E', '')
+        tamu_sonde_lons = tamu_sonde_lons.astype(float) * lon_negative
 
-    tamu_sonde_files_split = np.vstack(np.char.split(tamu_sonde_files_this_day, sep='_'))
-    tamu_sonde_lons = tamu_sonde_files_split[:, -3]
-    lon_negative = ((np.char.find(tamu_sonde_lons, 'W') >= 0).astype(int) - 0.5) * -2
-    tamu_sonde_lons = np.char.replace(tamu_sonde_lons, 'W', '')
-    tamu_sonde_lons = np.char.replace(tamu_sonde_lons, 'E', '')
-    tamu_sonde_lons = tamu_sonde_lons.astype(float) * lon_negative
+        tamu_sonde_lats = tamu_sonde_files_split[:, -2]
+        lat_negative = ((np.char.find(tamu_sonde_lats, 'S') >= 0).astype(int) - 0.5) * -2
+        tamu_sonde_lats = np.char.replace(tamu_sonde_lats, 'S', '')
+        tamu_sonde_lats = np.char.replace(tamu_sonde_lats, 'N', '')
+        tamu_sonde_lats = tamu_sonde_lats.astype(float) * lat_negative
 
-    tamu_sonde_lats = tamu_sonde_files_split[:, -2]
-    lat_negative = ((np.char.find(tamu_sonde_lats, 'S') >= 0).astype(int) - 0.5) * -2
-    tamu_sonde_lats = np.char.replace(tamu_sonde_lats, 'S', '')
-    tamu_sonde_lats = np.char.replace(tamu_sonde_lats, 'N', '')
-    tamu_sonde_lats = tamu_sonde_lats.astype(float) * lat_negative
-
-    tamu_sonde_sbf_side = identify_side(tamu_sonde_dts_this_day, tamu_sonde_lons, tamu_sonde_lats, tfm)
-    # tamu_sonde_sbf_side = identify_side_oneatatime(tamu_sonde_dts_this_day, tamu_sonde_lons, tamu_sonde_lats, tfm.time.data.compute(),
-    #                                             tfm.seabreeze.transpose(*tfm.lat.dims).data.compute(), tfm.lon.data.compute(), tfm.lat.data.compute())
+        tamu_sonde_sbf_side = identify_side(tamu_sonde_dts_this_day.astype('datetime64[s]').astype(float), tamu_sonde_lons, tamu_sonde_lats, tfm.time.compute().data.astype('datetime64[s]').astype(float),
+                                                    tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.compute().data, tfm.lat.compute().data)
+        
+    else:
+        print('Warning, no TAMU sondes found!')
+        tamu_sonde_files_this_day = np.empty(0, dtype=str)
+        tamu_sonde_dts_this_day = np.empty(0, dtype='datetime64[s]')
+        tamu_sonde_sbf_side = np.empty(0, dtype=int)
 
     all_sonde_files = np.concatenate([arm_sonde_files_this_day, tamu_sonde_files_this_day])
     all_sonde_dts = np.concatenate([arm_sonde_dts_this_day, tamu_sonde_dts_this_day])
@@ -302,7 +301,9 @@ def add_sfc_aerosol_data(tfm):
         arm_ccn_time_window = arm_ccn_time[readings_in_window]
         arm_ccn_lon = np.full(arm_ccn_time_window.shape, arm_ccn.lon.data)
         arm_ccn_lat = np.full(arm_ccn_time_window.shape, arm_ccn.lat.data)
-        arm_ccn_sbf = np.array(identify_side(arm_ccn_time_window, arm_ccn_lon, arm_ccn_lat, tfm))
+        arm_ccn_sbf = identify_side(arm_ccn_time_window.astype('datetime64[s]').astype(float), arm_ccn_lon, arm_ccn_lat, tfm.time.compute().data.astype('datetime64[s]').astype(float),
+                                            tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.compute().data, tfm.lat.compute().data)
+        
         arm_ccn_maritime = arm_ccn_ccn_window[arm_ccn_sbf == -1]
         arm_maritime_time = arm_ccn_time_window[arm_ccn_sbf == -1]
         maritime_ccn.extend(arm_ccn_maritime.tolist())
