@@ -5,17 +5,38 @@ import xarray as xr
 import pandas as pd
 from datetime import datetime as dt
 from os import path, listdir
+from glob import glob
 import numpy as np
-from pyxlma.coords import centers_to_edges
 from metpy.interpolate import interpolate_1d
 from scipy.interpolate import interp1d
 import sys
+import warnings
+import geopandas as gpd
+from matplotlib.path import Path
+
+# from numba import njit
+# @njit
+# def identify_side_jit(dts, lons, lats, tfm_times, seabreeze, grid_lon, grid_lat):
+#     seabreezes = np.zeros(lons.shape)
+#     for i in seabreeze.shape[0]:
+#         lon = lons[i]
+#         lat = lats[i]
+#         this_dt = dts[i]
+#         closest_time_idx = np.argmin(np.abs(tfm_times - this_dt))
+#         dist_idx_raveled = np.argmin(((grid_lon - lon)**2 + (grid_lat - lat)**2)**0.5)
+#         # dist_idx = np.unravel_index(distance.compute(), distance.shape)
+#         # Manually implement unravel_index since it isn't supported by numba
+#         closest_row_idx = dist_idx_raveled // grid_lon.shape[1]
+#         closest_col_idx = dist_idx_raveled % grid_lon.shape[1]
+#         closest_seabreeze = seabreeze[closest_time_idx, closest_row_idx, closest_col_idx]
+#         seabreezes[i] = closest_seabreeze
+#     return seabreezes
 
 
 def identify_side(dts, lons, lats, tfm):
     seabreezes = []
-    for lon, lat, dt in zip(lons, lats, dts):
-        tfm_time = tfm.sel(time=dt, method='nearest')
+    for lon, lat, this_dt in zip(lons, lats, dts):
+        tfm_time = tfm.sel(time=this_dt, method='nearest')
         distance = (((tfm_time.lon - lon)**2 + (tfm_time.lat - lat)**2)**0.5)
         dist_idx = np.unravel_index(distance.argmin().compute(), distance.shape)
         closest_seabreeze = tfm_time.seabreeze.transpose(*tfm_time.lat.dims).data[dist_idx].compute()
@@ -42,9 +63,7 @@ def interp_sounding_times(tfm_time, prev_idx, new_idx, data):
     return interper(times_between)
 
 
-def add_radiosonde_data(tfm, date_i_want, n_sounding_levels=1000):
-   
-
+def add_radiosonde_data(tfm, n_sounding_levels=2000):
     time_start_this_day = np.min(tfm.time.data)
     time_end_this_day = np.max(tfm.time.data)
 
@@ -69,8 +88,8 @@ def add_radiosonde_data(tfm, date_i_want, n_sounding_levels=1000):
     arm_sonde_lats = np.array(arm_sonde_lats)
 
     arm_sonde_sbf_side = identify_side(arm_sonde_dts_this_day, arm_sonde_lons, arm_sonde_lats, tfm)
-
-
+    # arm_sonde_sbf_side = identify_side_oneatatime(arm_sonde_dts_this_day, arm_sonde_lons, arm_sonde_lats, tfm.time.data.compute(),
+    #                                               tfm.seabreeze.transpose(*tfm.lat.dims).data.compute(), tfm.lon.data.compute(), tfm.lat.data.compute())
 
     # Load the TAMU sondes
     tamu_sonde_path = '/Volumes/LtgSSD/TAMU_SONDES/'
@@ -95,52 +114,43 @@ def add_radiosonde_data(tfm, date_i_want, n_sounding_levels=1000):
     tamu_sonde_lats = tamu_sonde_lats.astype(float) * lat_negative
 
     tamu_sonde_sbf_side = identify_side(tamu_sonde_dts_this_day, tamu_sonde_lons, tamu_sonde_lats, tfm)
+    # tamu_sonde_sbf_side = identify_side_oneatatime(tamu_sonde_dts_this_day, tamu_sonde_lons, tamu_sonde_lats, tfm.time.data.compute(),
+    #                                             tfm.seabreeze.transpose(*tfm.lat.dims).data.compute(), tfm.lon.data.compute(), tfm.lat.data.compute())
 
     all_sonde_files = np.concatenate([arm_sonde_files_this_day, tamu_sonde_files_this_day])
     all_sonde_dts = np.concatenate([arm_sonde_dts_this_day, tamu_sonde_dts_this_day])
-    all_sonde_lons = np.concatenate([arm_sonde_lons, tamu_sonde_lons])
-    all_sonde_lats = np.concatenate([arm_sonde_lats, tamu_sonde_lats])
     all_sonde_sbf_side = np.concatenate([arm_sonde_sbf_side, tamu_sonde_sbf_side])
 
     maritime_sonde_dts = all_sonde_dts[all_sonde_sbf_side == -1]
     maritime_sorting = np.argsort(maritime_sonde_dts)
     maritime_sonde_dts = maritime_sonde_dts[maritime_sorting]
-    maritime_sonde_files = all_sonde_files[all_sonde_sbf_side == -1][maritime_sorting]
-    maritime_sonde_lons = all_sonde_lons[all_sonde_sbf_side == -1][maritime_sorting]
-    maritime_sonde_lats = all_sonde_lats[all_sonde_sbf_side == -1][maritime_sorting]
 
     continental_sonde_dts = all_sonde_dts[all_sonde_sbf_side == -2]
     continental_sorting = np.argsort(continental_sonde_dts)
     continental_sonde_dts = continental_sonde_dts[continental_sorting]
-    continental_sonde_files = all_sonde_files[all_sonde_sbf_side == -2][continental_sorting]
-    continental_sonde_lons = all_sonde_lons[all_sonde_sbf_side == -2][continental_sorting]
-    continental_sonde_lats = all_sonde_lats[all_sonde_sbf_side == -2][continental_sorting]
 
     n_sounding_vars = 6
     maritime_representative_profile = np.full((tfm.time.shape[0], n_sounding_levels, n_sounding_vars), -999, dtype=float)
-    last_maritime_profile = np.full((n_sounding_levels, n_sounding_vars), np.nan)
     last_maritime_profile_time_index = -1
 
     continental_representative_profile = np.full((tfm.time.shape[0], n_sounding_levels, n_sounding_vars), -999, dtype=float)
-    last_continental_profile = np.full((n_sounding_levels), np.nan)
     last_continental_profile_time_index = -1
 
-    for f, this_dt, lon, lat, sbf in zip(all_sonde_files, all_sonde_dts, all_sonde_lons, all_sonde_lats, all_sonde_sbf_side):
+    for f, this_dt, sbf in zip(all_sonde_files, all_sonde_dts, all_sonde_sbf_side):
         if f.endswith('.cdf'):
             this_sonde_data = xr.open_dataset(f)
         else:
-            this_sonde_data_TAMU = pd.read_csv('/Volumes/LtgSSD/TAMU_SONDES/TAMU_TRACER_20220602_2028_95.93W_30.07N_TSPOTINT.txt', skiprows=28, encoding='latin1', sep='\\s+', names=[
+            this_sonde_data = pd.read_csv('/Volumes/LtgSSD/TAMU_SONDES/TAMU_TRACER_20220602_2028_95.93W_30.07N_TSPOTINT.txt', skiprows=28, encoding='latin1', sep='\\s+', names=[
                 'FlightTime', 'pres', 'tdry', 'RH', 'WindSpeed', 'WindDirection', 'AGL', 'AGL2', 'alt', 'Longitude', 'Latitude', 'y', 'x', 'Tv', 'dp', 'rho',
                 'e', 'v_wind', 'u_wind', 'range', 'rv', 'MSL2', 'UTC_DAY', 'UTC_TIME', 'UTC_AMPM', 'ELAPSED_TIME', 'ELAPSED_TIME2', 'ELAPSED_TIME3', 'FrostPoint']
                 )
-        new_pres = np.linspace(np.max(this_sonde_data.pres.values), np.min(this_sonde_data.pres.values), 1000)
+        new_pres = np.linspace(np.max(this_sonde_data.pres.values), np.min(this_sonde_data.pres.values), n_sounding_levels)
         new_t, new_dp, new_u, new_v, new_z = interpolate_1d(new_pres, this_sonde_data.pres.values, this_sonde_data.tdry.values,
                                 this_sonde_data.dp.values, this_sonde_data.u_wind.values, this_sonde_data.v_wind.values,
                                 this_sonde_data.alt.values)
         this_rep_profile = np.vstack([new_pres, new_t, new_dp, new_u, new_v, new_z]).T
 
         closest_time_index = np.argmin(np.abs(tfm.time.data - this_dt))
-        closest_time = tfm.time.data[closest_time_index]
         if sbf == -1:
             # This is a maritime sounding
             maritime_representative_profile[closest_time_index, :, :] = this_rep_profile
@@ -195,11 +205,90 @@ def add_radiosonde_data(tfm, date_i_want, n_sounding_levels=1000):
     return tfm_w_profiles
 
 
+def identify_madis(tfmtime, madis_ds_temp, madis_ds_dew, madis_ds_time, madis_ds_lat, madis_ds_lon, polyline):
+    maritime_temp = np.full(tfmtime.shape, np.nan)
+    maritime_dew = np.full(tfmtime.shape, np.nan)
+    continental_temp = np.full(tfmtime.shape, np.nan)
+    continental_dew = np.full(tfmtime.shape, np.nan)
+    for i in np.arange(tfmtime.shape[0]):
+        time = tfmtime[i]
+        if time not in polyline.index.values:
+            maritime_temp[i] = np.nan
+            maritime_dew[i] = np.nan
+            continental_temp[i] = np.nan
+            continental_dew[i] = np.nan
+            continue
+        lower_time_bound = time - 3600
+        in_window = ((madis_ds_time <= time) & (madis_ds_time >= lower_time_bound))
+        temp_in_window = madis_ds_temp[in_window]
+        dew_in_window = madis_ds_dew[in_window]
+        lat_in_window = madis_ds_lat[in_window]
+        lon_in_window = madis_ds_lon[in_window]
+        
+        this_polyline = polyline.loc[time]['geometry']
+        this_polyline_mpl = Path(np.array(this_polyline.exterior.coords))
+        sbf_window = this_polyline_mpl.contains_points(np.array([lon_in_window.flatten(), lat_in_window.flatten()]).T).reshape(lon_in_window.shape).astype(int) - 2
+        maritime_temp[i] = np.nanmean(temp_in_window[sbf_window == -1])
+        maritime_dew[i] = np.nanmean(dew_in_window[sbf_window == -1])
+        continental_temp[i] = np.nanmean(temp_in_window[sbf_window == -2])
+        continental_dew[i] = np.nanmean(dew_in_window[sbf_window == -2])
+    return maritime_temp, maritime_dew, continental_temp, continental_dew
+
+
+def add_madis_data(tfm):
+    date_i_want = tfm.time.data[0].astype('datetime64[D]').astype(dt)
+    grid_max_lon = tfm.lon.max().compute()
+    grid_min_lon = tfm.lon.min().compute()
+    grid_max_lat = tfm.lat.max().compute()
+    grid_min_lat = tfm.lat.min().compute()
+    madis_file = path.join(path.sep, 'Volumes', 'LtgSSD', 'sfcdata_madis', date_i_want.strftime('%Y%m%d_*'))
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore')
+        madis_ds = xr.open_mfdataset(madis_file, engine='netcdf4', chunks='auto', coords='minimal', concat_dim='recNum', combine='nested', compat='override')
+    madis_ds = madis_ds.where(((madis_ds.longitude <= grid_max_lon) & (madis_ds.longitude >= grid_min_lon) & (madis_ds.latitude <= grid_max_lat) & (madis_ds.latitude >= grid_min_lat)).compute(), drop=True)
+    dims_to_rm = list(madis_ds.dims)
+    dims_to_rm.remove('recNum')
+    madis_ds = madis_ds.drop_dims(dims_to_rm)
+    madis_ds_temp = madis_ds.temperature.data
+    madis_ds_temp_qc = madis_ds.temperatureQCR.data
+
+    madis_ds_dew = madis_ds.dewpoint.data
+    madis_ds_dew_qc = madis_ds.dewpointQCR.data
+
+    madis_ds_time = madis_ds.observationTime.data
+    madis_ds_lat = madis_ds.latitude.data
+    madis_ds_lon = madis_ds.longitude.data
+
+    madis_ds_invalid = np.zeros_like(madis_ds_temp, dtype=bool)
+    madis_ds_invalid[((madis_ds_temp_qc != 0) | (madis_ds_dew_qc != 0) | np.isnan(madis_ds_temp) | np.isnan(madis_ds_dew)).compute()] = True
+
+    madis_ds_temp[madis_ds_invalid] = np.nan
+    madis_ds_temp = madis_ds_temp.compute()
+    madis_ds_dew[madis_ds_invalid] = np.nan
+    madis_ds_dew = madis_ds_dew.compute()
+    madis_ds_time[madis_ds_invalid] = np.datetime64('NaT')
+    madis_ds_time = madis_ds_time.astype('datetime64[s]').compute()
+    madis_ds_lat[madis_ds_invalid] = np.nan
+    madis_ds_lat = madis_ds_lat.compute()
+    madis_ds_lon[madis_ds_invalid] = np.nan
+    madis_ds_lon = madis_ds_lon.compute()
+    polyline = gpd.read_file(f'/Volumes/LtgSSD/analysis/sam_polyline/{date_i_want.strftime("%Y-%m-%d")}_interpolated.json').set_index('index')
+    maritime_temp, maritime_dew, continental_temp, continental_dew = identify_madis(tfm.time.data.astype('datetime64[s]'), madis_ds_temp, madis_ds_dew,
+               madis_ds_time.astype('datetime64[s]'), madis_ds_lat, madis_ds_lon, polyline)
+    tfm_w_sfc = tfm.copy()
+    tfm_w_sfc.maritime_dewpoint_profile.transpose('vertical_levels', 'time').data[0, :][~np.isnan(maritime_dew)] = maritime_dew[~np.isnan(maritime_dew)] - 273.15
+    tfm_w_sfc.maritime_temperature_profile.transpose('vertical_levels', 'time').data[0, :][~np.isnan(maritime_temp)] = maritime_temp[~np.isnan(maritime_temp)] - 273.15
+    tfm_w_sfc.continental_dewpoint_profile.transpose('vertical_levels', 'time').data[0, :][~np.isnan(continental_dew)] = continental_dew[~np.isnan(continental_dew)] - 273.15
+    tfm_w_sfc.continental_temperature_profile.transpose('vertical_levels', 'time').data[0, :][~np.isnan(continental_temp)] = continental_temp[~np.isnan(continental_temp)] - 273.15
+    return tfm_w_sfc
+
+
 
 if __name__ == '__main__':
     date_i_want = sys.argv[1]
     date_i_want = dt.strptime(date_i_want, '%Y-%m-%d')
     tfm_path = f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/seabreeze.zarr'
     tfm = xr.open_dataset(tfm_path, engine='zarr', chunks='auto')
-    tfm_w_profiles = add_radiosonde_data(tfm, date_i_want)
-    tfm_w_profiles.to_zarr(tfm_path.replace('.zarr', '-obs.zarr'))
+    tfm_w_profiles = add_radiosonde_data(tfm)
+    tfm_w_sfc = add_madis_data(tfm_w_profiles)
+    tfm_w_sfc.to_zarr(tfm_path.replace('.zarr', '-obs.zarr'))

@@ -102,7 +102,6 @@ def plot_sfc_obs(dataset, time, var_to_plot, sfc_tick):
     if not sfc_tick:
         return gv.Points(([0], [0], [0], [0]), kdims=['Longitude', 'Latitude'], vdims=[var_to_plot, 'ID']).opts(visible=False)
     print('Plotting obs')
-    cells_of_interest = [2500, 3332, 3747]
     lower_time_bound = time - timedelta(hours=1)
     time = np.array([time]).astype('datetime64[us]')[0]
     lower_time_bound = np.array([lower_time_bound]).astype('datetime64[us]')[0]
