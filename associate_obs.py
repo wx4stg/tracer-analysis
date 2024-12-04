@@ -13,24 +13,25 @@ import sys
 import warnings
 import geopandas as gpd
 from matplotlib.path import Path
+from numba import njit
 
-# from numba import njit
-# @njit
-# def identify_side_jit(dts, lons, lats, tfm_times, seabreeze, grid_lon, grid_lat):
-#     seabreezes = np.zeros(lons.shape)
-#     for i in seabreeze.shape[0]:
-#         lon = lons[i]
-#         lat = lats[i]
-#         this_dt = dts[i]
-#         closest_time_idx = np.argmin(np.abs(tfm_times - this_dt))
-#         dist_idx_raveled = np.argmin(((grid_lon - lon)**2 + (grid_lat - lat)**2)**0.5)
-#         # dist_idx = np.unravel_index(distance.compute(), distance.shape)
-#         # Manually implement unravel_index since it isn't supported by numba
-#         closest_row_idx = dist_idx_raveled // grid_lon.shape[1]
-#         closest_col_idx = dist_idx_raveled % grid_lon.shape[1]
-#         closest_seabreeze = seabreeze[closest_time_idx, closest_row_idx, closest_col_idx]
-#         seabreezes[i] = closest_seabreeze
-#     return seabreezes
+
+@njit
+def identify_side_jit(dts, lons, lats, tfm_times, seabreeze, grid_lon, grid_lat):
+    seabreezes = np.zeros(lons.shape)
+    for i in np.arange(seabreezes.shape[0]):
+        lon = lons[i]
+        lat = lats[i]
+        this_dt = dts[i]
+        closest_time_idx = np.argmin(np.abs(tfm_times - this_dt))
+        dist_idx_raveled = np.argmin(((grid_lon - lon)**2 + (grid_lat - lat)**2)**0.5)
+        # dist_idx = np.unravel_index(distance.compute(), distance.shape)
+        # Manually implement unravel_index since it isn't supported by numba
+        closest_row_idx = dist_idx_raveled // grid_lon.shape[1]
+        closest_col_idx = dist_idx_raveled % grid_lon.shape[1]
+        closest_seabreeze = seabreeze[closest_time_idx, closest_row_idx, closest_col_idx]
+        seabreezes[i] = closest_seabreeze
+    return seabreezes
 
 
 def identify_side(dts, lons, lats, tfm):
@@ -282,6 +283,86 @@ def add_madis_data(tfm):
     tfm_w_sfc.continental_temperature_profile.transpose('vertical_levels', 'time').data[0, :][~np.isnan(continental_temp)] = continental_temp[~np.isnan(continental_temp)] - 273.15
     return tfm_w_sfc
 
+def add_sfc_aerosol_data(tfm):
+    date_i_want = tfm.time.data[0].astype('datetime64[D]').astype(dt)
+    arm_ccn_path = '/Volumes/LtgSSD/arm-ccn-avg/'
+    arm_ccn_files = glob(arm_ccn_path+date_i_want.strftime('*%Y%m%d*.nc'))
+    maritime_ccn = []
+    maritime_times = []
+    continental_ccn = []
+    continental_times = []
+    if len(arm_ccn_files) == 1:
+        arm_ccn_file = arm_ccn_files[0]
+        arm_ccn = xr.open_dataset(arm_ccn_file)
+        arm_ccn_ccn = arm_ccn.N_CCN.data
+        arm_ccn_aerosol = arm_ccn.aerosol_number_concentration
+        arm_ccn_time = arm_ccn.time.data
+        readings_in_window = ((arm_ccn.supersaturation_calculated >= 0.35) & (arm_ccn.supersaturation_calculated <= 0.55))
+        arm_ccn_ccn_window = arm_ccn_ccn[readings_in_window]
+        arm_ccn_time_window = arm_ccn_time[readings_in_window]
+        arm_ccn_lon = np.full(arm_ccn_time_window.shape, arm_ccn.lon.data)
+        arm_ccn_lat = np.full(arm_ccn_time_window.shape, arm_ccn.lat.data)
+        arm_ccn_sbf = np.array(identify_side(arm_ccn_time_window, arm_ccn_lon, arm_ccn_lat, tfm))
+        arm_ccn_maritime = arm_ccn_ccn_window[arm_ccn_sbf == -1]
+        arm_maritime_time = arm_ccn_time_window[arm_ccn_sbf == -1]
+        maritime_ccn.extend(arm_ccn_maritime.tolist())
+        maritime_times.extend(arm_maritime_time.tolist())
+        arm_ccn_continental = arm_ccn_ccn_window[arm_ccn_sbf == -2]
+        arm_continental_time = arm_ccn_time_window[arm_ccn_sbf == -2]
+        continental_ccn.extend(arm_ccn_continental.tolist())
+        continental_times.extend(arm_continental_time.tolist())
+    else:
+        print(f'Warning, {len(arm_ccn_files)} ARM CCN files found!')
+    tamu_ccn_path = '/Volumes/LtgSSD/brooks-ccn/'
+    tamu_ccn_files = glob(tamu_ccn_path+date_i_want.strftime('*%y%m%d_ccn*.csv'))
+    if len(tamu_ccn_files) == 1:
+        tamu_ccn_file = tamu_ccn_files[0]
+        tamu_ccn = pd.read_csv(tamu_ccn_file)
+        tamu_ccn = tamu_ccn[tamu_ccn['SS'] == 0.4]
+        tamu_times_window = pd.to_datetime(tamu_ccn.loc[:, 'Time'], format='%y%m%d %H:%M:%S').values
+        tamu_ccn_window = tamu_ccn.loc[:, 'N_CCN'].values
+        tamu_ccn_lon_window = tamu_ccn.loc[:, 'Longitude'].values
+        tamu_ccn_lat_window = tamu_ccn.loc[:, 'Latitude'].values
+        tamu_ccn_sbf = identify_side(tamu_times_window, tamu_ccn_lon_window, tamu_ccn_lat_window, tfm)
+        tamu_ccn_maritime = tamu_ccn_window[tamu_ccn_sbf == -1]
+        tamu_maritime_time = tamu_times_window[tamu_ccn_sbf == -1]
+        maritime_ccn.extend(tamu_ccn_maritime.tolist())
+        maritime_times.extend(tamu_maritime_time.tolist())
+        tamu_ccn_continental = tamu_ccn_window[tamu_ccn_sbf == -2]
+        tamu_continental_time = tamu_times_window[tamu_ccn_sbf == -2]
+        continental_ccn.extend(tamu_ccn_continental.tolist())
+        continental_times.extend(tamu_continental_time.tolist())
+    else:
+        print(f'Warning, {len(tamu_ccn_files)} TAMU CCN files found!')
+    continental_sorting = np.argsort(continental_times)
+    continental_times = np.array(continental_times)[continental_sorting]
+    continental_ccn = np.array(continental_ccn)[continental_sorting]
+    maritime_sorting = np.argsort(maritime_times)
+    maritime_times = np.array(maritime_times)[maritime_sorting]
+    maritime_ccn = np.array(maritime_ccn)[maritime_sorting]
+    if len(maritime_ccn) == 0:
+        print('No maritime CCN data found!')
+        maritime_ccn_vert = np.full((tfm.time.shape[0], tfm.vertical_levels.shape[0]), np.nan)
+    else:
+        maritime_ccn_interper = interp1d(maritime_times, maritime_ccn, kind='linear', bounds_error=False, fill_value=(maritime_ccn[0], maritime_ccn[-1]))
+        maritime_ccn_interp = maritime_ccn_interper(tfm.time.data)
+        maritime_ccn_vert = np.repeat(maritime_ccn_interp[:, np.newaxis], tfm.vertical_levels.shape[0], axis=1)
+
+    if len(continental_ccn) == 0:
+        print('No continental CCN data found!')
+        continental_ccn_vert = np.full((tfm.time.shape[0], tfm.vertical_levels.shape[0]), np.nan)
+    else:
+        continental_ccn_interper = interp1d(continental_times, continental_ccn, kind='linear', bounds_error=False, fill_value=(continental_ccn[0], continental_ccn[-1]))
+        continental_ccn_interp = continental_ccn_interper(tfm.time.data)
+        continental_ccn_vert = np.repeat(continental_ccn_interp[:, np.newaxis], tfm.vertical_levels.shape[0], axis=1)
+
+    tfm_w_aerosols = tfm.copy()
+    tfm_w_aerosols = tfm_w_aerosols.assign({
+        'maritime_ccn_profile' : (('time', 'vertical_levels'), maritime_ccn_vert),
+        'continental_ccn_profile' : (('time', 'vertical_levels'), continental_ccn_vert)
+    })
+
+    return tfm_w_aerosols
 
 
 if __name__ == '__main__':
@@ -291,4 +372,5 @@ if __name__ == '__main__':
     tfm = xr.open_dataset(tfm_path, engine='zarr', chunks='auto')
     tfm_w_profiles = add_radiosonde_data(tfm)
     tfm_w_sfc = add_madis_data(tfm_w_profiles)
-    tfm_w_sfc.to_zarr(tfm_path.replace('.zarr', '-obs.zarr'))
+    tfm_w_aerosols = add_sfc_aerosol_data(tfm_w_sfc)
+    tfm_w_aerosols.to_zarr(tfm_path.replace('.zarr', '-obs.zarr'))
