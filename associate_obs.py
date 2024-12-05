@@ -8,6 +8,9 @@ from os import path, listdir
 from glob import glob
 import numpy as np
 from metpy.interpolate import interpolate_1d
+from metpy.units import units
+from metpy import calc as mpcalc
+from ecape.calc import calc_ecape
 from scipy.interpolate import interp1d
 import sys
 import warnings
@@ -51,6 +54,15 @@ def interp_sounding_times(tfm_time, prev_idx, new_idx, data):
         axis=0
     )
     return interper(times_between)
+
+
+def add_seabreeze_to_features(tfm):
+    feature_seabreezes = identify_side(tfm.feature_time.values.astype('datetime64[s]').astype(float), tfm.feature_lon.values, tfm.feature_lat.values, tfm.time.values.astype('datetime64[s]').astype(float), 
+                                    tfm.seabreeze.values, tfm.lon.values, tfm.lat.values)
+    tfm = tfm.assign({
+        'feature_seabreeze' : (('feature',), feature_seabreezes)
+    })
+    return tfm
 
 
 def add_radiosonde_data(tfm, n_sounding_levels=2000):
@@ -198,8 +210,6 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
     for var in new_continental_vars.keys():
         tfm_w_profiles[var].attrs['units'] = 'hPa' if 'pressure' in var else 'C' if 'temperature' in var else 'm/s' if 'u' in var or 'v' in var else 'm'
 
-
-
     tfm_w_profiles.attrs['soundings_used'] = [path.basename(f) for f in all_sonde_files]
 
     return tfm_w_profiles
@@ -282,6 +292,80 @@ def add_madis_data(tfm):
     tfm_w_sfc.continental_temperature_profile.transpose('vertical_levels', 'time').data[0, :][~np.isnan(continental_temp)] = continental_temp[~np.isnan(continental_temp)] - 273.15
     return tfm_w_sfc
 
+
+def compute_sounding_stats(tfm):
+    feature_pressure_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
+    feature_msl_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
+    feature_temp_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
+    feature_dew_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
+    feature_u_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
+    feature_v_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
+    feature_ccn_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
+
+    feature_mlcape = np.zeros((tfm.feature.shape[0]))
+    feature_mlcin = np.zeros((tfm.feature.shape[0]))
+    feature_mlecape = np.zeros((tfm.feature.shape[0]))
+
+    for sidenum, side in enumerate(['continental', 'maritime']):
+        sidenum -= 2
+        temp = tfm[f'{side}_temperature_profile'].data * units.degC
+        dew = tfm[f'{side}_dewpoint_profile'].data * units.degC
+        pressure = tfm[f'{side}_pressure_profile'].data * units.hPa
+        height = tfm[f'{side}_msl_profile'].data * units.m
+        u = tfm[f'{side}_u_profile'].data * (units.m/units.s)
+        v = tfm[f'{side}_v_profile'].data * (units.m/units.s)
+        ccn = tfm[f'{side}_ccn_profile'].data
+
+        mlcapes = np.zeros(tfm.time.shape[0])
+        mlcins = np.zeros(tfm.time.shape[0])
+        mlecapes = np.zeros(tfm.time.shape[0])
+        for i in range(tfm.time.shape[0]):
+            temp_i = temp[i, :]
+            dew_i = dew[i, :]
+            pressure_i = pressure[i, :]
+            height_i = height[i, :]
+            u_i = u[i, :]
+            v_i = v[i, :]
+
+            mlcape, mlcin = mpcalc.mixed_layer_cape_cin(pressure_i, temp_i, dew_i)
+            spc_hum = mpcalc.specific_humidity_from_dewpoint(pressure_i, dew_i)
+            mlecape = calc_ecape(height_i, pressure_i, temp_i, spc_hum, u_i, v_i, cape_type='mixed_layer')
+
+            mlcapes[i] = mlcape.magnitude
+            mlcins[i] = mlcin.magnitude
+            mlecapes[i] = mlecape.magnitude
+        features_matching = np.where(tfm.feature_seabreeze.data == sidenum)[0]
+        for matching_feat_idx in features_matching:
+            matching_time_idx = tfm.feature_time_index.data[matching_feat_idx]
+            feature_pressure_profile[matching_feat_idx, :] = pressure[matching_time_idx, :]
+            feature_msl_profile[matching_feat_idx, :] = height[matching_time_idx, :]
+            feature_temp_profile[matching_feat_idx, :] = temp[matching_time_idx, :]
+            feature_dew_profile[matching_feat_idx, :] = dew[matching_time_idx, :]
+            feature_u_profile[matching_feat_idx, :] = u[matching_time_idx, :]
+            feature_v_profile[matching_feat_idx, :] = v[matching_time_idx, :]
+            feature_ccn_profile[matching_feat_idx, :] = ccn[matching_time_idx, :]
+
+            feature_mlcape[matching_feat_idx] = mlcapes[matching_time_idx]
+            feature_mlcin[matching_feat_idx] = mlcins[matching_time_idx]
+            feature_mlecape[matching_feat_idx] = mlecapes[matching_time_idx]
+        tfm.drop_vars([f'{side}_temperature_profile', f'{side}_dewpoint_profile', f'{side}_pressure_profile', f'{side}_msl_profile',
+                       f'{side}_u_profile', f'{side}_v_profile', f'{side}_ccn_profile'])
+    tfm_stats = tfm.copy()
+    tfm_stats = tfm_stats.assign({
+        'feature_pressure_profile' : (('feature', 'vertical_levels'), feature_pressure_profile),
+        'feature_msl_profile' : (('feature', 'vertical_levels'), feature_msl_profile),
+        'feature_temp_profile' : (('feature', 'vertical_levels'), feature_temp_profile),
+        'feature_dew_profile' : (('feature', 'vertical_levels'), feature_dew_profile),
+        'feature_u_profile' : (('feature', 'vertical_levels'), feature_u_profile),
+        'feature_v_profile' : (('feature', 'vertical_levels'), feature_v_profile),
+        'feature_ccn_profile' : (('feature', 'vertical_levels'), feature_ccn_profile),
+        'feature_mlcape' : (('feature',), feature_mlcape),
+        'feature_mlcin' : (('feature',), feature_mlcin),
+        'feature_mlecape' : (('feature',), feature_mlecape)
+    })
+    return tfm_stats
+
+
 def add_sfc_aerosol_data(tfm):
     date_i_want = tfm.time.data[0].astype('datetime64[D]').astype(dt)
     arm_ccn_path = '/Volumes/LtgSSD/arm-ccn-avg/'
@@ -294,7 +378,6 @@ def add_sfc_aerosol_data(tfm):
         arm_ccn_file = arm_ccn_files[0]
         arm_ccn = xr.open_dataset(arm_ccn_file)
         arm_ccn_ccn = arm_ccn.N_CCN.data
-        arm_ccn_aerosol = arm_ccn.aerosol_number_concentration
         arm_ccn_time = arm_ccn.time.data
         readings_in_window = ((arm_ccn.supersaturation_calculated >= 0.35) & (arm_ccn.supersaturation_calculated <= 0.55))
         arm_ccn_ccn_window = arm_ccn_ccn[readings_in_window]
@@ -371,7 +454,7 @@ def generate_seg_mask_cell_track(tobac_data, convert_to='cell'):
     tobac_data['segmentation_mask'] = xr.where(tobac_data.segmentation_mask == 0, np.nan, tobac_data.segmentation_mask.astype(np.float32))
     feature_ids = tobac_data.feature.data
     seg_data_feature = tobac_data.segmentation_mask.data
-    cell_ids = tobac_data[f'feature_parent_{convert_to}_id'].sel(feature=feature_ids).data
+    cell_ids = tobac_data[f'feature_parent_{convert_to}_id'].sel(feature=feature_ids).compute().data
     feature_to_cell_map = dict(zip(feature_ids, cell_ids))
     seg_data_cell = seg_data_feature.copy()
     print('-Mapping')
@@ -379,16 +462,11 @@ def generate_seg_mask_cell_track(tobac_data, convert_to='cell'):
     print('-Converting')
     seg_data_cell = seg_data_cell.astype(np.float32)
     print(f'-seg mask {convert_to} to xarray')
-    tobac_data['segmentation_mask_track'] = xr.DataArray(seg_data_cell, dims=('time', 'y', 'x'), coords={'time': tobac_data.time.data, 'y': tobac_data.y.data, 'x': tobac_data.x.data})
+    tobac_data[f'segmentation_mask_{convert_to}'] = xr.DataArray(seg_data_cell, dims=('time', 'y', 'x'), coords={'time': tobac_data.time.data, 'y': tobac_data.y.data, 'x': tobac_data.x.data})
     return tobac_data
 
 
 def convert_to_track_time(tfmo):
-    feature_seabreezes = identify_side(tfmo.feature_time.values.astype('datetime64[s]').astype(float), tfmo.feature_lon.values, tfmo.feature_lat.values, tfmo.time.values.astype('datetime64[s]').astype(float), 
-                                    tfmo.seabreeze.values, tfmo.lon.values, tfmo.lat.values)
-    tfmo = tfmo.assign({
-        'feature_seabreeze' : (('feature',), feature_seabreezes)
-    })
     tfmo['feature_parent_track_id'] = tfmo.feature_parent_track_id.astype('int32')
     for old_name in ['min_L2-MCMIPC', 'max_reflectivity']:
         new_name = 'feature_'+old_name
@@ -548,9 +626,11 @@ if __name__ == '__main__':
     date_i_want = dt.strptime(date_i_want, '%Y-%m-%d')
     tfm_path = f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/seabreeze.zarr'
     tfm = xr.open_dataset(tfm_path, engine='zarr', chunks='auto')
-    tfm_w_profiles = add_radiosonde_data(tfm)
+    tfm_fseabreeze = add_seabreeze_to_features(tfm)
+    tfm_w_profiles = add_radiosonde_data(tfm_fseabreeze)
     tfm_w_sfc = add_madis_data(tfm_w_profiles)
     tfm_w_aerosols = add_sfc_aerosol_data(tfm_w_sfc)
-    tfm_w_parents = generate_seg_mask_cell_track(generate_seg_mask_cell_track(tfm_w_aerosols, convert_to='track'), convert_to='cell')
-    tfm_obs = convert_to_track_time(tfm_w_parents)
+    tfm_sounding_stats = compute_sounding_stats(tfm_w_aerosols)
+    tfm_w_parents = generate_seg_mask_cell_track(generate_seg_mask_cell_track(tfm_sounding_stats, convert_to='track'), convert_to='cell')
+    tfm_obs = convert_to_track_time(tfm_w_aerosols)
     tfm_obs.to_zarr(tfm_path.replace('.zarr', '-obs.zarr'))
