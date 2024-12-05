@@ -169,8 +169,8 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
             if last_maritime_profile_time_index != -1:
                 maritime_representative_profile[last_maritime_profile_time_index+1:closest_time_index, :, :] = interp_sounding_times(tfm.time.data, last_maritime_profile_time_index, closest_time_index, maritime_representative_profile)
             else:
-                last_maritime_profile_time_index = closest_time_index
                 maritime_representative_profile[0:closest_time_index, :, :] = this_rep_profile
+            last_maritime_profile_time_index = closest_time_index
         elif sbf == -2:
             # This is a continental sounding
             continental_representative_profile[closest_time_index, :, :] = this_rep_profile
@@ -179,8 +179,7 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
             else:
                 last_continental_profile_time_index = closest_time_index
                 continental_representative_profile[0:closest_time_index, :, :] = this_rep_profile
-        else:
-            raise NotImplementedError('Only maritime and continental sides are supported')
+            last_continental_profile_time_index = closest_time_index
         
     continental_representative_profile[last_continental_profile_time_index+1:, :, :] = continental_representative_profile[last_continental_profile_time_index, :, :]
     maritime_representative_profile[last_maritime_profile_time_index+1:, :, :] = maritime_representative_profile[last_maritime_profile_time_index, :, :]
@@ -348,8 +347,7 @@ def compute_sounding_stats(tfm):
             feature_mlcape[matching_feat_idx] = mlcapes[matching_time_idx]
             feature_mlcin[matching_feat_idx] = mlcins[matching_time_idx]
             feature_mlecape[matching_feat_idx] = mlecapes[matching_time_idx]
-        tfm = tfm.drop_vars([f'{side}_temperature_profile', f'{side}_dewpoint_profile', f'{side}_pressure_profile', f'{side}_msl_profile',
-                       f'{side}_u_profile', f'{side}_v_profile', f'{side}_ccn_profile'])
+
     tfm_stats = tfm.copy()
     tfm_stats = tfm_stats.assign({
         'feature_pressure_profile' : (('feature', 'vertical_levels'), feature_pressure_profile),
