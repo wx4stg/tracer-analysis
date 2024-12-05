@@ -348,7 +348,7 @@ def compute_sounding_stats(tfm):
             feature_mlcape[matching_feat_idx] = mlcapes[matching_time_idx]
             feature_mlcin[matching_feat_idx] = mlcins[matching_time_idx]
             feature_mlecape[matching_feat_idx] = mlecapes[matching_time_idx]
-        tfm.drop_vars([f'{side}_temperature_profile', f'{side}_dewpoint_profile', f'{side}_pressure_profile', f'{side}_msl_profile',
+        tfm = tfm.drop_vars([f'{side}_temperature_profile', f'{side}_dewpoint_profile', f'{side}_pressure_profile', f'{side}_msl_profile',
                        f'{side}_u_profile', f'{side}_v_profile', f'{side}_ccn_profile'])
     tfm_stats = tfm.copy()
     tfm_stats = tfm_stats.assign({
@@ -487,13 +487,25 @@ def convert_to_track_time(tfmo):
     track_lon_ctr = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
     track_rhoHV_volume = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
     track_ZDR_volume = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-
     track_min_L2_MCMIPC = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
 
-    for feature_idx in np.arange(tfmo.feature.shape[0]):
+    track_pressure_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
+    track_height_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
+    track_temperature_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
+    track_dewpoint_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
+    track_u_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
+    track_v_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
+    track_ccn_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
+
+    track_mlcape = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
+    track_mlcin = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
+    track_mlecape = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
+
+    tfmo.feature_parent_track_id.load()
+    tfmo.feature_time_index.load()
+    features_with_parents = np.where(tfmo.feature_parent_cell_id.compute().data != -1)[0]
+    for feature_idx in features_with_parents:
         parent_track = tfmo.feature_parent_track_id.data[feature_idx]
-        if parent_track == -1:
-            continue
         time_idx = tfmo.feature_time_index.data[feature_idx]
 
         # Handle seabreeze (mean if already set)
@@ -604,6 +616,94 @@ def convert_to_track_time(tfmo):
         elif previously_set_min_L2_MCMIPC != this_feature_min_L2_MCMIPC:
             track_min_L2_MCMIPC[parent_track, time_idx] = np.nanmin([previously_set_min_L2_MCMIPC, this_feature_min_L2_MCMIPC])
 
+
+        # Handle pressure profile (mean if already set)
+        this_feature_pressure_profile = tfmo.feature_pressure_profile.data[feature_idx, :]
+        previously_set_pressure_profile = track_pressure_profile[parent_track, time_idx, :]
+        if np.all(np.isnan(previously_set_pressure_profile)):
+            track_pressure_profile[parent_track, time_idx, :] = this_feature_pressure_profile
+        elif not np.all(previously_set_pressure_profile == this_feature_pressure_profile):
+            track_pressure_profile[parent_track, time_idx, :] = np.nanmean([previously_set_pressure_profile, this_feature_pressure_profile], axis=0)
+
+
+        # Handle height profile (mean if already set)
+        this_feature_height_profile = tfmo.feature_msl_profile.data[feature_idx, :]
+        previously_set_height_profile = track_height_profile[parent_track, time_idx, :]
+        if np.all(np.isnan(previously_set_height_profile)):
+            track_height_profile[parent_track, time_idx, :] = this_feature_height_profile
+        elif not np.all(previously_set_height_profile == this_feature_height_profile):
+            track_height_profile[parent_track, time_idx, :] = np.nanmean([previously_set_height_profile, this_feature_height_profile], axis=0)
+
+
+        # Handle temperature profile (mean if already set)
+        this_feature_temperature_profile = tfmo.feature_temp_profile.data[feature_idx, :]
+        previously_set_temperature_profile = track_temperature_profile[parent_track, time_idx, :]
+        if np.all(np.isnan(previously_set_temperature_profile)):
+            track_temperature_profile[parent_track, time_idx, :] = this_feature_temperature_profile
+        elif not np.all(previously_set_temperature_profile == this_feature_temperature_profile):
+            track_temperature_profile[parent_track, time_idx, :] = np.nanmean([previously_set_temperature_profile, this_feature_temperature_profile], axis=0)
+
+
+        # Handle dewpoint profile (mean if already set)
+        this_feature_dewpoint_profile = tfmo.feature_dew_profile.data[feature_idx, :]
+        previously_set_dewpoint_profile = track_dewpoint_profile[parent_track, time_idx, :]
+        if np.all(np.isnan(previously_set_dewpoint_profile)):
+            track_dewpoint_profile[parent_track, time_idx, :] = this_feature_dewpoint_profile
+        elif not np.all(previously_set_dewpoint_profile == this_feature_dewpoint_profile):
+            track_dewpoint_profile[parent_track, time_idx, :] = np.nanmean([previously_set_dewpoint_profile, this_feature_dewpoint_profile], axis=0)
+
+
+        # Handle u profile (mean if already set)
+        this_feature_u_profile = tfmo.feature_u_profile.data[feature_idx, :]
+        previously_set_u_profile = track_u_profile[parent_track, time_idx, :]
+        if np.all(np.isnan(previously_set_u_profile)):
+            track_u_profile[parent_track, time_idx, :] = this_feature_u_profile
+        elif not np.all(previously_set_u_profile == this_feature_u_profile):
+            track_u_profile[parent_track, time_idx, :] = np.nanmean([previously_set_u_profile, this_feature_u_profile], axis=0)
+
+
+        # Handle v profile (mean if already set)
+        this_feature_v_profile = tfmo.feature_v_profile.data[feature_idx, :]
+        previously_set_v_profile = track_v_profile[parent_track, time_idx, :]
+        if np.all(np.isnan(previously_set_v_profile)):
+            track_v_profile[parent_track, time_idx, :] = this_feature_v_profile
+        elif not np.all(previously_set_v_profile == this_feature_v_profile):
+            track_v_profile[parent_track, time_idx, :] = np.nanmean([previously_set_v_profile, this_feature_v_profile], axis=0)
+
+
+        # Handle ccn profile (mean if already set)
+        this_feature_ccn_profile = tfmo.feature_ccn_profile.data[feature_idx, :]
+        previously_set_ccn_profile = track_ccn_profile[parent_track, time_idx, :]
+        if np.all(np.isnan(previously_set_ccn_profile)):
+            track_ccn_profile[parent_track, time_idx, :] = this_feature_ccn_profile
+        elif not np.all(previously_set_ccn_profile == this_feature_ccn_profile):
+            track_ccn_profile[parent_track, time_idx, :] = np.nanmean([previously_set_ccn_profile, this_feature_ccn_profile], axis=0)
+
+
+        # Handle mlcape (mean if already set)
+        this_feature_mlcape = tfmo.feature_mlcape.data[feature_idx]
+        previously_set_mlcape = track_mlcape[parent_track, time_idx]
+        if np.isnan(previously_set_mlcape):
+            track_mlcape[parent_track, time_idx] = this_feature_mlcape
+        elif previously_set_mlcape != this_feature_mlcape:
+            track_mlcape[parent_track, time_idx] = np.nanmean([previously_set_mlcape, this_feature_mlcape])
+        
+        # Handle mlcin (mean if already set)
+        this_feature_mlcin = tfmo.feature_mlcin.data[feature_idx]
+        previously_set_mlcin = track_mlcin[parent_track, time_idx]
+        if np.isnan(previously_set_mlcin):
+            track_mlcin[parent_track, time_idx] = this_feature_mlcin
+        elif previously_set_mlcin != this_feature_mlcin:
+            track_mlcin[parent_track, time_idx] = np.nanmean([previously_set_mlcin, this_feature_mlcin])
+
+        # Handle mlecape (mean if already set)
+        this_feature_mlecape = tfmo.feature_mlecape.data[feature_idx]
+        previously_set_mlecape = track_mlecape[parent_track, time_idx]
+        if np.isnan(previously_set_mlecape):
+            track_mlecape[parent_track, time_idx] = this_feature_mlecape
+        elif previously_set_mlecape != this_feature_mlecape:
+            track_mlecape[parent_track, time_idx] = np.nanmean([previously_set_mlecape, this_feature_mlecape])
+
     tfmo = tfmo.assign({
         'track_seabreeze' : (('track', 'time'), track_seabreezes),
         'track_area' : (('track', 'time'), track_area),
@@ -616,7 +716,17 @@ def convert_to_track_time(tfmo):
         'track_lon' : (('track', 'time'), track_lon_ctr),
         'track_rhvdeficitvol' : (('track', 'time'), track_rhoHV_volume),
         'track_zdrvol' : (('track', 'time'), track_ZDR_volume),
-        'track_min_L2_MCMIPC' : (('track', 'time'), track_min_L2_MCMIPC)
+        'track_min_L2_MCMIPC' : (('track', 'time'), track_min_L2_MCMIPC),
+        'track_pressure_profile' : (('track', 'time', 'vertical_levels'), track_pressure_profile),
+        'track_msl_profile' : (('track', 'time', 'vertical_levels'), track_height_profile),
+        'track_temp_profile' : (('track', 'time', 'vertical_levels'), track_temperature_profile),
+        'track_dew_profile' : (('track', 'time', 'vertical_levels'), track_dewpoint_profile),
+        'track_u_profile' : (('track', 'time', 'vertical_levels'), track_u_profile),
+        'track_v_profile' : (('track', 'time', 'vertical_levels'), track_v_profile),
+        'track_ccn_profile' : (('track', 'time', 'vertical_levels'), track_ccn_profile),
+        'track_mlcape' : (('track', 'time'), track_mlcape),
+        'track_mlcin' : (('track', 'time'), track_mlcin),
+        'track_mlecape' : (('track', 'time'), track_mlecape)
     })
     return tfmo
 
@@ -632,5 +742,5 @@ if __name__ == '__main__':
     tfm_w_aerosols = add_sfc_aerosol_data(tfm_w_sfc)
     tfm_sounding_stats = compute_sounding_stats(tfm_w_aerosols)
     tfm_w_parents = generate_seg_mask_cell_track(generate_seg_mask_cell_track(tfm_sounding_stats, convert_to='track'), convert_to='cell')
-    tfm_obs = convert_to_track_time(tfm_w_aerosols)
+    tfm_obs = convert_to_track_time(tfm_w_parents)
     tfm_obs.to_zarr(tfm_path.replace('.zarr', '-obs.zarr'))
