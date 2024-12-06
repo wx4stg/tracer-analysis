@@ -58,7 +58,7 @@ def interp_sounding_times(tfm_time, prev_idx, new_idx, data):
 
 def add_seabreeze_to_features(tfm):
     feature_seabreezes = identify_side(tfm.feature_time.values.astype('datetime64[s]').astype(float), tfm.feature_lon.values, tfm.feature_lat.values, tfm.time.values.astype('datetime64[s]').astype(float), 
-                                    tfm.seabreeze.values, tfm.lon.values, tfm.lat.values)
+                                    tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.values, tfm.lat.values)
     tfm = tfm.assign({
         'feature_seabreeze' : (('feature',), feature_seabreezes)
     })
@@ -405,7 +405,8 @@ def add_sfc_aerosol_data(tfm):
         tamu_ccn_window = tamu_ccn.loc[:, 'N_CCN'].values
         tamu_ccn_lon_window = tamu_ccn.loc[:, 'Longitude'].values
         tamu_ccn_lat_window = tamu_ccn.loc[:, 'Latitude'].values
-        tamu_ccn_sbf = identify_side(tamu_times_window, tamu_ccn_lon_window, tamu_ccn_lat_window, tfm)
+        tamu_ccn_sbf = identify_side(tamu_times_window.astype('datetime64[s]').astype(float), tamu_ccn_lon_window, tamu_ccn_lat_window, tfm.time.compute().data.astype('datetime64[s]').astype(float),
+                                            tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.compute().data, tfm.lat.compute().data)
         tamu_ccn_maritime = tamu_ccn_window[tamu_ccn_sbf == -1]
         tamu_maritime_time = tamu_times_window[tamu_ccn_sbf == -1]
         maritime_ccn.extend(tamu_ccn_maritime.tolist())
