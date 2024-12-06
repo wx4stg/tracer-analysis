@@ -81,17 +81,14 @@ def plot_radar(radar, time, radar_selector, radar_tick):
     print(f'Radar plot done for {time}')
     return plot
 
-def plot_seg_mask(dataset, time, seg_selector, seg_tick):
+def plot_seg_mask(dataset, time, seg_tick):
     if not seg_tick:
         return gv.QuadMesh(([0, 1], [0, 1], [[0, 1], [2, 3]]), kdims=['Longitude', 'Latitude'], vdims=['segmentation_mask']).opts(visible=False)
     print('Plotting segmentation')
     this_time = dataset.sel(time=time)
     lons = this_time.lon.data
     lats = this_time.lat.data
-    if seg_selector == 'Feature ID':
-        seg_mask = this_time.segmentation_mask.data.compute()
-    elif seg_selector == 'Cell ID':
-        seg_mask = this_time.segmentation_mask_cell.data.compute()
+    seg_mask = this_time.segmentation_mask.data.compute()
     plot = gv.QuadMesh((lons, lats, seg_mask), kdims=['Longitude', 'Latitude'], vdims=['segmentation_mask']).opts(
         cmap='plasma', colorbar=False, tools=['hover'], visible=seg_tick)
     print(f'Segmentation plot done for {time}')
@@ -129,7 +126,7 @@ def write_json(_):
     select_geoms = {}
 
 if __name__ == '__main__':
-    date_i_want = dt.strptime(sys.argv[1], '%Y%m%d')
+    date_i_want = dt.strptime(sys.argv[1], '%Y-%m-%d')
     tfm = xr.open_dataset(f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/Track_features_merges_augmented.zarr', engine='zarr', chunks='auto')
     unique_times = np.unique(tfm.time.data).astype('datetime64[us]').astype(dt).tolist()
 
@@ -156,9 +153,8 @@ if __name__ == '__main__':
     satellite = hv.DynamicMap(pn.bind(plot_satellite, date_slider, channel_select, satellite_tick))
     
     seg_tick = pn.widgets.Checkbox(name='Show Segmentation')
-    seg_sel = pn.widgets.Select(name='Grid Product', options=['Feature ID', 'Cell ID'], value='Cell ID')
     seg_mask_func = partial(plot_seg_mask, dataset=tfm.copy())
-    seg = hv.DynamicMap(pn.bind(seg_mask_func, time=date_slider, seg_selector=seg_sel, seg_tick=seg_tick))
+    seg = hv.DynamicMap(pn.bind(seg_mask_func, time=date_slider, seg_tick=seg_tick))
 
     radar_sel = pn.widgets.Select(name='Radar Product', options=['Reflectivity', 'RhoHV', 'ZDR', 'Velocity', 'Spectrum Width'], value='Reflectivity')
     hgx_tick = pn.widgets.Checkbox(name='Show KHGX', value=False)
@@ -201,7 +197,7 @@ if __name__ == '__main__':
               stations *
               polygon * lower_limit * eastern_limit
               ).opts(width=1300, height=825, xlim=(xmin, xmax), ylim=(ymin, ymax))
-    control_column = pn.Column(date_slider, seg_sel, seg_tick, channel_select, satellite_tick, radar_sel, hgx_tick, lch_tick, iah_tick, hou_tick, stations_tick, div_tick, write_btn)
+    control_column = pn.Column(date_slider, seg_tick, channel_select, satellite_tick, radar_sel, hgx_tick, lch_tick, iah_tick, hou_tick, stations_tick, div_tick, write_btn)
     col = pn.Row(pn.Column(my_map), control_column)
 
 

@@ -9,7 +9,7 @@ conn = nexradaws.NexradAwsInterface()
 
 
 if __name__ == '__main__':
-    start = dt.strptime(sys.argv[1], '%Y%m%d%H%M')
+    start = dt.strptime(sys.argv[1], '%Y-%m-%dT%H:%M')
     end = start + timedelta(hours=int(sys.argv[2]))
 
     scans = conn.get_avail_scans_in_range(start, end, 'KHGX')
