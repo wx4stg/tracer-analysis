@@ -111,8 +111,10 @@ if __name__ == '__main__':
     all_seabreezes_ds = xr.full_like(tfm.segmentation_mask, -2).astype(int)
     print('Gridding...')
     for i, time in enumerate(tfm.time.data):
-        if time < start_time or time > end_time:
-            continue
+        if time < start_time:
+            time = start_time
+        elif time > end_time:
+            time = end_time
         this_seabreeze = np.zeros_like(lon_wide)
         time_dt = np.array(time).astype('datetime64[s]').astype(dt).item()
         if time_dt in polyline.index.values.astype(dt):
@@ -138,14 +140,14 @@ if __name__ == '__main__':
     tfm['seabreeze'] = all_seabreezes_ds
     print('Identifying features...')
     feature_seabreeze = xr.zeros_like(tfm.feature, dtype=int)
-    cell_seabreeze = np.zeros_like(np.meshgrid(tfm.cell, tfm.time))
     for i, feat_id in enumerate(tfm.feature.data):
-        print(f'{(i+1)/len(tfm.feature.data)*100:.2f}%')
         this_feat = tfm.sel(feature=feat_id)
         this_feat_time_idx = this_feat.feature_time_index.data.compute().item()
         this_feat_time = tfm.time.data[this_feat_time_idx].astype('datetime64[s]').astype(dt)
-        if this_feat_time < start_time or this_feat_time > end_time:
-            continue
+        if this_feat_time < start_time:
+            this_feat_time = start_time
+        elif this_feat_time > end_time:
+            this_feat_time = end_time
         this_feat_lon = this_feat.feature_lon.data.compute().item()
         this_feat_lat = this_feat.feature_lat.data.compute().item()
         this_polyline = polyline[polyline.index.values == this_feat_time]['geometry'].values[0]
