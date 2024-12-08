@@ -69,44 +69,6 @@ def plot_surface(madis_ds, time_i_want):
     print(path_to_save)
     plt.close(fig)
 
-    grid_x, grid_y, u_grid = interpolate_to_grid(latest_obs.longitude.data, latest_obs.latitude.data, u, interp_type='barnes', hres=0.01,
-                                                boundary_coords={
-                                                    'south': lim_mins[1],
-                                                    'north': lim_maxs[1],
-                                                    'west': lim_mins[0],
-                                                    'east': lim_maxs[0]
-                                                })
-    _, _, v_grid = interpolate_to_grid(latest_obs.longitude.data, latest_obs.latitude.data, v, interp_type='barnes', hres=0.01,
-                                        boundary_coords={
-                                                'south': lim_mins[1],
-                                                'north': lim_maxs[1],
-                                                'west': lim_mins[0],
-                                                'east': lim_maxs[0]
-                                            })
-    wind_xarray = xr.Dataset({
-        'u' : xr.DataArray(u_grid.to('m/s'), dims=['latitude', 'longitude']),
-        'v' : xr.DataArray(v_grid.to('m/s'), dims=['latitude', 'longitude'])
-    }, coords={
-        'latitude': grid_y[:, 0],
-        'longitude': grid_x[0, :]
-    })
-    div = mpcalc.divergence(wind_xarray.u, wind_xarray.v).data.m
-    divmx = np.nanmax(np.abs(div.data))
-    divfig = plt.figure()
-    divax = plt.axes(projection=ccrs.epsg(3857))
-    divax.pcolormesh(grid_x, grid_y, div, cmap='balance', vmin=-divmx, vmax=divmx, transform=ccrs.PlateCarree())
-    divax.add_feature(cfeat.COASTLINE.with_scale('10m'), edgecolor='gray', linewidth=0.5)
-    divax.set_extent([lim_mins[0], lim_maxs[0], lim_mins[1], lim_maxs[1]], crs=ccrs.PlateCarree())
-    px = 1/plt.rcParams['figure.dpi']
-    divfig.set_size_inches(2048*px, 2048*px)
-    extent = divax.get_tightbbox(divfig.canvas.get_renderer()).transformed(divfig.dpi_scale_trans.inverted())
-    path_to_save = path.join('/Volumes','LtgSSD','analysis', 'mpl-generated', 'sfcdiv', f'{time_i_want.strftime("%Y%m%d_%H%M%S")}.png')
-    Path(path.dirname(path_to_save)).mkdir(parents=True, exist_ok=True)
-    divfig.savefig(path_to_save, bbox_inches=extent, transparent=True)
-    print(path_to_save)
-    plt.close(divfig)
-
-
 
 def queue_surface(times, date_i_want, client=None):
     res = []
