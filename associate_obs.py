@@ -364,7 +364,7 @@ def compute_sounding_stats(tfm):
     return tfm_stats
 
 
-def add_sfc_aerosol_data(tfm):
+def add_sfc_aerosol_data(tfm, ss_lower_bound=0.6, ss_upper_bound=0.8, ss_target=0.6):
     date_i_want = tfm.time.data[0].astype('datetime64[D]').astype(dt)
     arm_ccn_path = '/Volumes/LtgSSD/arm-ccn-avg/'
     arm_ccn_files = glob(arm_ccn_path+date_i_want.strftime('*%Y%m%d*.nc'))
@@ -377,7 +377,7 @@ def add_sfc_aerosol_data(tfm):
         arm_ccn = xr.open_dataset(arm_ccn_file)
         arm_ccn_ccn = arm_ccn.N_CCN.data
         arm_ccn_time = arm_ccn.time.data
-        readings_in_window = ((arm_ccn.supersaturation_calculated >= 0.35) & (arm_ccn.supersaturation_calculated <= 0.55))
+        readings_in_window = ((arm_ccn.supersaturation_calculated >= ss_lower_bound) & (arm_ccn.supersaturation_calculated <= ss_upper_bound))
         arm_ccn_ccn_window = arm_ccn_ccn[readings_in_window]
         arm_ccn_time_window = arm_ccn_time[readings_in_window]
         arm_ccn_lon = np.full(arm_ccn_time_window.shape, arm_ccn.lon.data)
@@ -400,7 +400,7 @@ def add_sfc_aerosol_data(tfm):
     if len(tamu_ccn_files) == 1:
         tamu_ccn_file = tamu_ccn_files[0]
         tamu_ccn = pd.read_csv(tamu_ccn_file)
-        tamu_ccn = tamu_ccn[tamu_ccn['SS'] == 0.4]
+        tamu_ccn = tamu_ccn[tamu_ccn['SS'] == ss_target]
         tamu_times_window = pd.to_datetime(tamu_ccn.loc[:, 'Time'], format='%y%m%d %H:%M:%S').values
         tamu_ccn_window = tamu_ccn.loc[:, 'N_CCN'].values
         tamu_ccn_lon_window = tamu_ccn.loc[:, 'Longitude'].values
