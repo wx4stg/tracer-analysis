@@ -10,11 +10,13 @@ from datetime import datetime as dt
 
 if __name__ == '__main__':
     date_i_want = sys.argv[1]
-    date_i_want = dt.strptime(date_i_want, '%Y-%m-%d')
+    date_i_want = dt.strptime(date_i_want, '%Y-%m-%d').replace(hour=12)
     seabreeze = xr.open_dataset(f'./sam_sbf/{date_i_want.strftime('%Y-%m-%d')}_seabreeze.nc')
     
     i=0
     for time in seabreeze.time.data:
+        if time.astype('datetime64[s]').astype(dt) < date_i_want:
+            continue
         sbf = seabreeze.sel(time=time).seabreeze
         if sbf.data.max() == sbf.data.min():
             continue
