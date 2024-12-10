@@ -447,17 +447,26 @@ def add_sfc_aerosol_data(tfm, ss_lower_bound=0.6, ss_upper_bound=0.8, ss_target=
 
     return tfm_w_aerosols
 
+@njit(parallel=True)
+def replace_values(seg_mask, cell_ids):
+    seg_mask_flat = seg_mask.flatten()
+    seg_mask_cell = np.zeros(seg_mask_flat.shape, dtype=np.float32)
+    indices = np.argwhere(~np.isnan(seg_mask_flat)).flatten()
+    for i in indices:
+        print(f"Processing pixel {i} of {seg_mask_flat.shape[0]}")
+        seg_mask_flat[i] = cell_ids[int(seg_mask_flat[i]) - 1]
+    return seg_mask_cell.reshape(seg_mask.shape)
+
+
 def generate_seg_mask_cell_track(tobac_data, convert_to='cell'):
     tobac_data = tobac_data.copy()
     print('-Overwriting 0 in segmask with nan')
     tobac_data['segmentation_mask'] = xr.where(tobac_data.segmentation_mask == 0, np.nan, tobac_data.segmentation_mask.astype(np.float32))
-    feature_ids = tobac_data.feature.data
-    seg_data_feature = tobac_data.segmentation_mask.data
+    feature_ids = tobac_data.feature.compute().data
+    seg_data_feature = tobac_data.segmentation_mask.compute().data
     cell_ids = tobac_data[f'feature_parent_{convert_to}_id'].sel(feature=feature_ids).compute().data
-    feature_to_cell_map = dict(zip(feature_ids, cell_ids))
-    seg_data_cell = seg_data_feature.copy()
     print('-Mapping')
-    seg_data_cell = np.vectorize(feature_to_cell_map.get)(seg_data_cell)
+    seg_data_cell = replace_values(seg_data_feature, feature_ids, cell_ids)
     print('-Converting')
     seg_data_cell = seg_data_cell.astype(np.float32)
     print(f'-seg mask {convert_to} to xarray')
@@ -473,7 +482,7 @@ def convert_to_track_time(tfmo):
         ren = tfmo[old_name].rename(new_name)
         tfmo[new_name] = ren
         tfmo = tfmo.drop_vars(old_name)
-    tfmo.drop_vars('feature_maxrefl')
+        tfmo.drop_vars('feature_maxrefl')
 
     track_seabreezes = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
     track_area = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), 0)
@@ -742,4 +751,4 @@ if __name__ == '__main__':
     tfm_sounding_stats = compute_sounding_stats(tfm_w_aerosols)
     tfm_w_parents = generate_seg_mask_cell_track(generate_seg_mask_cell_track(tfm_sounding_stats, convert_to='track'), convert_to='cell')
     tfm_obs = convert_to_track_time(tfm_w_parents)
-    tfm_obs.to_zarr(tfm_path.replace('.zarr', '-obs.zarr'))
+    tfm_obs.chunk('auto').to_zarr(tfm_path.replace('.zarr', '-obs.zarr'))
