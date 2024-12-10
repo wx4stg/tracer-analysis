@@ -156,6 +156,8 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
                 'FlightTime', 'pres', 'tdry', 'RH', 'WindSpeed', 'WindDirection', 'AGL', 'AGL2', 'alt', 'Longitude', 'Latitude', 'y', 'x', 'Tv', 'dp', 'rho',
                 'e', 'v_wind', 'u_wind', 'range', 'rv', 'MSL2', 'UTC_DAY', 'UTC_TIME', 'UTC_AMPM', 'ELAPSED_TIME', 'ELAPSED_TIME2', 'ELAPSED_TIME3', 'FrostPoint']
                 )
+        if len(this_sonde_data.pres.values) < 2:
+            continue
         new_pres = np.linspace(np.max(this_sonde_data.pres.values), np.min(this_sonde_data.pres.values), n_sounding_levels)
         new_t, new_dp, new_u, new_v, new_z = interpolate_1d(new_pres, this_sonde_data.pres.values, this_sonde_data.tdry.values,
                                 this_sonde_data.dp.values, this_sonde_data.u_wind.values, this_sonde_data.v_wind.values,
