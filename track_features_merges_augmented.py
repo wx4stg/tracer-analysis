@@ -52,33 +52,15 @@ def apply_coord_transforms(tfm):
     return tfm
 
 
-def generate_seg_mask_cell(tobac_data):
-    tobac_data = tobac_data.copy()
-    print('-Overwriting 0 in segmask with nan')
-    tobac_data['segmentation_mask'] = xr.where(tobac_data.segmentation_mask == 0, np.nan, tobac_data.segmentation_mask.astype(np.float32)).compute()
-    feature_ids = tobac_data.feature.data
-    seg_data_feature = tobac_data.segmentation_mask.data
-    cell_ids = tobac_data.feature_parent_cell_id.sel(feature=feature_ids).data.compute()
-    feature_to_cell_map = dict(zip(feature_ids, cell_ids))
-    seg_data_cell = seg_data_feature.copy()
-    print('-Mapping')
-    seg_data_cell = np.vectorize(feature_to_cell_map.get)(seg_data_cell)
-    print('-Converting')
-    seg_data_cell = seg_data_cell.astype(np.float32)
-    print('-seg mask cell to xarray')
-    tobac_data['segmentation_mask_cell'] = xr.DataArray(seg_data_cell, dims=('time', 'y', 'x'), coords={'time': tobac_data.time.data, 'y': tobac_data.y.data, 'x': tobac_data.x.data})
-    return tobac_data
-
-
 def add_eet_to_radar_data(tobac_day):
     radar_path = path.join(path.sep, 'Volumes', 'LtgSSD', 'nexrad_gridded', tobac_day.strftime('%B').upper(), tobac_day.strftime('%Y%m%d'))
     print('Finding elevations for all tobac grid points')
     radar_path_contents = sorted(listdir(radar_path))
-    first_radar_file = path.join(radar_path, radar_path_contents[0])
-    radar_data = xr.open_dataset(first_radar_file, chunks='auto')
     print('Starting processing...')
 
     for this_radar_path in radar_path_contents:
+        if not this_radar_path.endswith('.nc'):
+            continue
         this_radar_path = path.join(radar_path, this_radar_path)
         radar_data = xr.open_dataset(this_radar_path, chunks='auto')
 
@@ -114,24 +96,6 @@ def add_eet_to_tobac_data(tfm, date_i_want):
         all_feature_eet[i] = feature_eet
     tfm['feature_echotop'] = all_feature_eet
     return tfm
-
-
-def add_timeseries_data_to_toabc_path(tobac_data, date_i_want):
-    tobac_data = tobac_data.copy()
-    tobac_save_path = f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime('%Y%m%d')}/'
-    for f in listdir(tobac_save_path):
-        if f.startswith('timeseries_data_melt') and f.endswith('.nc'):
-            tobac_timeseries_path = path.join(tobac_save_path, f)
-            break
-    else:
-        print('>>>>>>>Unable to find timeseries data...>>>>>>>')
-        return tobac_data
-    timeseries_data = xr.open_dataset(tobac_timeseries_path, chunks='auto')
-    timeseries_data = timeseries_data.reindex(feature=tobac_data.feature.data, fill_value=np.nan)
-    for dv in timeseries_data.data_vars:
-        if dv not in tobac_data.data_vars:
-            tobac_data[dv] = timeseries_data[dv].copy()
-    return tobac_data
 
 
 def find_satellite_temp_for_feature(tfm_time, feature_i_want, area_i_want):
@@ -186,7 +150,10 @@ def find_satellite_temp_for_feature(tfm_time, feature_i_want, area_i_want):
         method='linear'
     )
     vals.shape = this_feature_x2d.shape
-    vals_i_want = vals[this_seg_mask == feature_i_want]
+    try:
+        vals_i_want = vals[this_seg_mask == feature_i_want]
+    except IndexError as e:
+        vals_i_want = np.array([np.nan])
     if np.all(np.isnan(vals_i_want)):
         min_sat_temp = np.nan
         mean_sat_temp = np.nan
@@ -274,13 +241,13 @@ if __name__ == '__main__':
     tobac_data = xr.open_dataset(path_to_read, chunks='auto')
     print('Applying coord transforms')
     tobac_data = apply_coord_transforms(tobac_data)
-    print('Generating seg_mask_cell')
-    tobac_data = generate_seg_mask_cell(tobac_data)
+    tobac_data.chunk('auto').to_zarr(path_to_read.replace('.nc', '_coordinated.zarr'))
     if not path.exists(f'/Volumes/LtgSSD/nexrad_zarr/{date_i_want.strftime('%B').upper()}/{date_i_want.strftime('%Y%m%d')}'):
         print('I don\'t have EET for this day, computing it')
         add_eet_to_radar_data(date_i_want)
     print('Finding echo top heights')
     tobac_data = add_eet_to_tobac_data(tobac_data, date_i_want)
+    tobac_data.chunk('auto').to_zarr(path_to_read.replace('Track_features_merges.nc', 'tfma_checkpoint.zarr'))
     print('Adding timeseries data to tobac data')
     tobac_data = add_timeseries_data_to_toabc_path(tobac_data, date_i_want)
     print('Adding satellite data to tobac data')
