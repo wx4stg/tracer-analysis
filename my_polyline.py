@@ -127,7 +127,15 @@ def write_json(_):
 
 if __name__ == '__main__':
     date_i_want = dt.strptime(sys.argv[1], '%Y-%m-%d')
-    tfm = xr.open_dataset(f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/Track_features_merges_augmented.zarr', engine='zarr', chunks='auto')
+    tfma_path = f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/Track_features_merges_augmented.zarr'
+    if path.exists(tfma_path):
+        tfm = xr.open_dataset(tfma_path, engine='zarr', chunks='auto')
+    elif path.exists(tfma_path.replace('augmented.zarr', 'coordinated.zarr')):
+        tfm = xr.open_dataset(tfma_path.replace('augmented.zarr', 'coordinated.zarr'), engine='zarr', chunks='auto')
+    elif path.exists(tfma_path.replace('Track_features_merges_augmented.zarr', 'tfma_checkpoint.zarr')):
+        tfm = xr.open_dataset(tfma_path.replace('Track_features_merges_augmented.zarr', 'tfma_checkpoint.zarr'), engine='zarr', chunks='auto')
+    else:
+        raise FileNotFoundError(f'No file found at {tfma_path}')
     unique_times = np.unique(tfm.time.data).astype('datetime64[us]').astype(dt).tolist()
 
     grid_max_lon = tfm.lon.max().compute()
@@ -138,8 +146,8 @@ if __name__ == '__main__':
     goes_time_range_start = tfm.time.data.astype('datetime64[us]').astype(dt).min()
     goes_time_range_end = tfm.time.data.astype('datetime64[us]').astype(dt).max()
 
-    lma = xr.open_dataset('/Volumes/LtgSSD/'+date_i_want.strftime('%B').lower()+date_i_want.strftime('/6sensor_minimum/LYLOUT_%y%m%d_000000_86400_map500m.nc'),
-                          chunks='auto')
+    # lma = xr.open_dataset('/Volumes/LtgSSD/'+date_i_want.strftime('%B').lower()+date_i_want.strftime('/6sensor_minimum/LYLOUT_%y%m%d_000000_86400_map500m.nc'),
+    #                       chunks='auto')
     
     
     sat_min_x = tfm.g16_scan_x.min().data.compute()
