@@ -12,7 +12,7 @@ if __name__ == '__main__':
     start = dt.strptime(sys.argv[1], '%Y-%m-%dT%H:%M')
     end = start + timedelta(hours=int(sys.argv[2]))
 
-    scans = conn.get_avail_scans_in_range(start, end, 'KHGX')
+    scans = conn.get_avail_scans_in_range(start, end, sys.argv[3])
     scans = [scan for scan in scans if 'MDM' not in scan.filename and not scan.filename.endswith('j')]
     target = f'/Volumes/LtgSSD/nexrad_l2/{start.strftime("%Y%m%d")}'
     already_downloaded = glob(f'{target}/*')
