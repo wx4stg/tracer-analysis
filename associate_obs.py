@@ -447,6 +447,25 @@ def add_sfc_aerosol_data(tfm, ss_lower_bound=0.6, ss_upper_bound=0.8, ss_target=
 
     return tfm_w_aerosols
 
+
+def add_timeseries_data_to_toabc_path(tobac_data, date_i_want):
+    tobac_data = tobac_data.copy()
+    tobac_save_path = f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime('%Y%m%d')}/'
+    for f in listdir(tobac_save_path):
+        if f.startswith('timeseries_data_melt') and f.endswith('.nc'):
+            tobac_timeseries_path = path.join(tobac_save_path, f)
+            break
+    else:
+        print('>>>>>>>Unable to find timeseries data...>>>>>>>')
+        return tobac_data
+    timeseries_data = xr.open_dataset(tobac_timeseries_path, chunks='auto')
+    timeseries_data = timeseries_data.reindex(feature=tobac_data.feature.data, fill_value=np.nan)
+    for dv in timeseries_data.data_vars:
+        if dv not in tobac_data.data_vars:
+            tobac_data[dv] = timeseries_data[dv].copy()
+    return tobac_data
+
+
 @njit(parallel=True)
 def replace_values(seg_mask, cell_ids):
     seg_mask_flat = seg_mask.flatten()
@@ -466,7 +485,7 @@ def generate_seg_mask_cell_track(tobac_data, convert_to='cell'):
     seg_data_feature = tobac_data.segmentation_mask.compute().data
     cell_ids = tobac_data[f'feature_parent_{convert_to}_id'].sel(feature=feature_ids).compute().data
     print('-Mapping')
-    seg_data_cell = replace_values(seg_data_feature, feature_ids, cell_ids)
+    seg_data_cell = replace_values(seg_data_feature, cell_ids)
     print('-Converting')
     seg_data_cell = seg_data_cell.astype(np.float32)
     print(f'-seg mask {convert_to} to xarray')
@@ -744,7 +763,8 @@ if __name__ == '__main__':
     date_i_want = dt.strptime(date_i_want, '%Y-%m-%d')
     tfm_path = f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/seabreeze.zarr'
     tfm = xr.open_dataset(tfm_path, engine='zarr', chunks='auto')
-    tfm_fseabreeze = add_seabreeze_to_features(tfm)
+    tfm_ts = add_timeseries_data_to_toabc_path(tfm, date_i_want)
+    tfm_fseabreeze = add_seabreeze_to_features(tfm_ts)
     tfm_w_profiles = add_radiosonde_data(tfm_fseabreeze)
     tfm_w_sfc = add_madis_data(tfm_w_profiles)
     tfm_w_aerosols = add_sfc_aerosol_data(tfm_w_sfc)
