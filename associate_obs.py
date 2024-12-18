@@ -471,11 +471,10 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want):
 @njit(parallel=True)
 def replace_values(seg_mask, cell_ids):
     seg_mask_flat = seg_mask.flatten()
-    seg_mask_cell = np.zeros(seg_mask_flat.shape, dtype=np.float32)
+    seg_mask_cell = np.full(seg_mask_flat.shape, np.nan, dtype=np.float32)
     indices = np.argwhere(~np.isnan(seg_mask_flat)).flatten()
     for i in indices:
-        print(f"Processing pixel {i} of {seg_mask_flat.shape[0]}")
-        seg_mask_flat[i] = cell_ids[int(seg_mask_flat[i]) - 1]
+        seg_mask_cell[i] = cell_ids[int(seg_mask_flat[i]) - 1]
     return seg_mask_cell.reshape(seg_mask.shape)
 
 
@@ -488,8 +487,6 @@ def generate_seg_mask_cell_track(tobac_data, convert_to='cell'):
     cell_ids = tobac_data[f'feature_parent_{convert_to}_id'].sel(feature=feature_ids).compute().data
     print('-Mapping')
     seg_data_cell = replace_values(seg_data_feature, cell_ids)
-    print('-Converting')
-    seg_data_cell = seg_data_cell.astype(np.float32)
     print(f'-seg mask {convert_to} to xarray')
     tobac_data[f'segmentation_mask_{convert_to}'] = xr.DataArray(seg_data_cell, dims=('time', 'y', 'x'), coords={'time': tobac_data.time.data, 'y': tobac_data.y.data, 'x': tobac_data.x.data})
     return tobac_data
