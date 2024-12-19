@@ -76,6 +76,8 @@ def add_eet_to_radar_data(tobac_day, client=None):
     radar_path = path.join(path.sep, 'Volumes', 'LtgSSD', 'nexrad_gridded', tobac_day.strftime('%B').upper(), tobac_day.strftime('%Y%m%d'))
     print('Finding elevations for all tobac grid points')
     radar_path_contents = sorted(listdir(radar_path))
+    if len(radar_path_contents) == 0:
+        raise ValueError('No gridded radar data found!')
     print('Starting processing...')
     all_res = []
     for this_radar_path in radar_path_contents:
@@ -135,17 +137,19 @@ def add_eet_to_tobac_data(tfm, date_i_want, client=None):
             feature_eet[s:e] = d
 
     tfm = tfm.assign(
-        feature_eet = (('feature'), feature_eet)
+        feature_echotop = (('feature'), feature_eet)
     )
     return tfm
 
 
-def find_satellite_temp_for_feature(tfm_time, feature_i_want, area_i_want, feat_echotop=0):
-    RE_HOUSTON = 6372.9*1000
+def find_satellite_temp_for_feature(tfm_time, feature_i_want, area_i_want, feat_echotop=7e3):
+    if np.isnan(feat_echotop):
+        feat_echotop = 7e3
+    ltg_ell = lightning_ellipse_rev[1]
     # Find the index boundaries of the feature
     x_indices_valid, y_indices_valid = np.asarray(tfm_time.segmentation_mask == feature_i_want).nonzero()
     if len(x_indices_valid) == 0:
-        return np.nan, np.nan, np.nan
+        return np.nan
     first_x_idx = np.min(x_indices_valid)
     first_y_idx = np.min(y_indices_valid)
     last_x_idx = np.max(x_indices_valid)
@@ -161,7 +165,7 @@ def find_satellite_temp_for_feature(tfm_time, feature_i_want, area_i_want, feat_
     tpcs = coords.TangentPlaneCartesianSystem(ctrLat=tfm_time.center_lat,
                                               ctrLon=tfm_time.center_lon, ctrAlt=0)
     satsys = coords.GeostationaryFixedGridSystem(subsat_lon=area_i_want.nominal_satellite_subpoint_lon.data.item(),
-                                                 sweep_axis='x', ellipse=[RE_HOUSTON+feat_echotop, RE_HOUSTON+feat_echotop])
+                                                 sweep_axis='x', ellipse=(ltg_ell[0] - 14e3 + feat_echotop, ltg_ell[1] - 6e3 + feat_echotop))
 
     # Get the ECEF coordinates of the grid centers of the rectangle containing the feature
     this_feature_ECEF = tpcs.toECEF(this_feature_x2d.flatten(), this_feature_y2d.flatten(), np.zeros_like(this_feature_y2d).flatten())
@@ -204,7 +208,29 @@ def find_satellite_temp_for_feature(tfm_time, feature_i_want, area_i_want, feat_
     return min_sat_temp
 
 
-def add_goes_data_to_tobac_path(tfm):
+def add_goes_data_to_tobac_path(tfm, client=None):
+    def prepare_find_satellite(this_feature_time_idx):
+        time = tfm.time.data[this_feature_time_idx]
+        feature_indicies_at_time = np.nonzero(tfm.feature_time_index.data == this_feature_time_idx)[0]
+        tfm_time = tfm.isel(feature=feature_indicies_at_time, time=this_feature_time_idx)
+        this_timestep_sat_temps = np.full(tfm_time.feature.shape[0], np.nan)
+        if this_feature_time_idx not in download_results['tobac_idx'].values:
+            this_feat_time_dt = time.astype('datetime64[s]').astype(dt)
+            print(f'>>>>>>>Warning, no satellite data for {this_feat_time_dt}>>>>>>>')
+            return np.nan, 0, 0
+        goes_file_path = download_results[download_results['tobac_idx'] == this_feature_time_idx]['file'].values[0]
+        goes_file_path = path.join('/Volumes/LtgSSD/', goes_file_path)
+        satellite_data = xr.open_dataset(goes_file_path).sel(y=goes_yslice, x=goes_xsclice)
+        for j, feat_id in enumerate(tfm_time.feature.data):
+            this_feat = tfm_time.sel(feature=feat_id)
+            this_feature_time_idx = this_feat.feature_time_index.data.item()
+            # Load satellite data for this index
+            this_min_sat_temp = find_satellite_temp_for_feature(tfm_time, feat_id, satellite_data, feat_echotop=this_feat.feature_echotop.data.item())
+            this_timestep_sat_temps[j] = this_min_sat_temp
+        satellite_data.close()
+        start_idx = feature_indicies_at_time[0]
+        end_idx = feature_indicies_at_time[-1] + 1
+        return this_timestep_sat_temps, start_idx, end_idx
     tfm = tfm.copy()
     min_sat_temp = np.full(tfm.feature.shape[0], np.nan)
 
@@ -212,7 +238,7 @@ def add_goes_data_to_tobac_path(tfm):
     goes_time_range_end = tfm.time.data.astype('datetime64[s]').astype(dt)[-1]
     goes_ctt = GOES(satellite=16, product='ABI-L2-MCMIPC')
     print('Start download')
-    download_results = goes_ctt.timerange(goes_time_range_start-timedelta(minutes=15), goes_time_range_end+timedelta(minutes=15))
+    download_results = goes_ctt.timerange(goes_time_range_start-timedelta(minutes=15), goes_time_range_end+timedelta(minutes=15), max_cpus=4)
     print('End download')
     
     download_results['valid'] = download_results[['start', 'end']].mean(axis=1)
@@ -242,26 +268,16 @@ def add_goes_data_to_tobac_path(tfm):
     padding = .001
     goes_xsclice = slice(goes_min_x-padding, goes_max_x+padding)
     goes_yslice = slice(goes_max_y+padding, goes_min_y-padding)
-    for this_feature_time_idx, time in enumerate(tfm.time.data):
-        print(time.astype('datetime64[s]').astype(dt))
-        feature_indicies_at_time = np.nonzero(tfm.feature_time_index.data == this_feature_time_idx)[0]
-        tfm_time = tfm.isel(feature=feature_indicies_at_time, time=this_feature_time_idx)
-        if this_feature_time_idx not in download_results['tobac_idx'].values:
-            this_feat_time_dt = time.astype('datetime64[s]').astype(dt)
-            print(f'>>>>>>>Warning, no satellite data for {this_feat_time_dt}>>>>>>>')
-            continue
-        goes_file_path = download_results[download_results['tobac_idx'] == this_feature_time_idx]['file'].values[0]
-        goes_file_path = path.join('/Volumes/LtgSSD/', goes_file_path)
-        satellite_data = xr.open_dataset(goes_file_path).sel(y=goes_yslice, x=goes_xsclice)
-        for feat_id in enumerate(tfm.feature.data):
-            this_feat = tfm_time.sel(feature=feat_id)
-            this_feature_time_idx = this_feat.feature_time_index.data.item()
-            # Load satellite data for this index
-            this_min_sat_temp = find_satellite_temp_for_feature(tfm_time, feat_id, satellite_data, feat_echotop=this_feat.feature_echotop.data.item())
-            min_sat_temp[feat_id - 1] = this_min_sat_temp
-
-    
-
+    if client is not None:
+        res = client.map(prepare_find_satellite, range(tfm.time.shape[0]))
+        client.gather(res)
+        for promised_res in res:
+            d, s, e = promised_res.result()
+            min_sat_temp[s:e] = d
+    else:
+        for this_feature_time_idx in range(tfm.time.shape[0]):
+            d, s, e = prepare_find_satellite(this_feature_time_idx)
+            min_sat_temp[s:e] = d
     tfm[f'min_L2-MCMIPC'] = xr.DataArray(min_sat_temp, dims=('feature'))
     return tfm
 
@@ -288,7 +304,7 @@ if __name__ == '__main__':
     print('Finding echo top heights')
     tobac_data = add_eet_to_tobac_data(tobac_data, date_i_want, client)
     print('Adding satellite data to tobac data')
-    tobac_data = add_goes_data_to_tobac_path(tobac_data)
+    tobac_data = add_goes_data_to_tobac_path(tobac_data, client)
     print('Saving')
     path_to_write = path_to_read.replace('.nc', '_augmented.zarr')
     tobac_data.chunk('auto').to_zarr(path_to_write)
