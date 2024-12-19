@@ -89,31 +89,54 @@ def add_eet_to_radar_data(tobac_day, client=None):
 
 
 def add_eet_to_tobac_data(tfm, date_i_want, client=None):
-    def find_eet_feature(feature_id):
-        this_feature = tfm.sel(feature=feature_id)
-        this_feature_dt = this_feature.feature_time.data.astype('datetime64[s]').item()
-        radar_path_i_want = radar_files[np.argmin(np.abs(radar_dts - this_feature_dt))]
-        radar = xr.open_dataset(radar_path_i_want, engine='zarr').load()
-        this_eet = radar.eet_sam.isel(time=0)
-        this_seg_mask = this_feature.segmentation_mask
-        feature_eet = np.nanmax(np.where(this_seg_mask.data == feature_id, this_eet, 0))
-        return feature_eet
+    def find_eet_feature(tfm, radar_path, time_idx):
+        radar = xr.open_dataset(radar_path, engine='zarr')
+        feature_indicies_at_time = np.nonzero(tfm.feature_time_index.data == time_idx)[0]
+        features_at_time = tfm.isel(feature=feature_indicies_at_time, time=time_idx)
+        feature_eet = np.full(features_at_time.feature.data.shape, np.nan)
+        for j, feat_to_find in enumerate(features_at_time.feature.data):
+            this_seg_mask = features_at_time.segmentation_mask.data
+            this_eet = radar.eet_sam.isel(time=0).data
+            if not np.any(this_seg_mask == feat_to_find):
+                continue
+            feature_eet[j] = np.nanmax(this_eet[this_seg_mask == feat_to_find])
+        start_idx = feature_indicies_at_time[0]
+        end_idx = feature_indicies_at_time[-1] + 1
+        radar.close()
+        return feature_eet, start_idx, end_idx
+    
+    def prepare_eet_features(i):
+        rf = radar_files[i]
+        if not rf.endswith('.zarr'):
+            return
+        radar_dt = dt.strptime(rf, 'KHGX%Y%m%d_%H%M%S_V06_grid.zarr')
+        expected_dt = tfm_dts[i]
+        if radar_dt != expected_dt:
+            raise ValueError(f'Error at index {i}! Expected {expected_dt}, got {radar_dt}')
+        rp = radar_top_path + rf
+        return find_eet_feature(tfm, rp, i)
+
+
     radar_top_path = f'/Volumes/LtgSSD/nexrad_zarr/{date_i_want.strftime('%B').upper()}/{date_i_want.strftime('%Y%m%d')}/'
-    radar_files = listdir(radar_top_path)
-    radar_dts = [dt.strptime(rf, 'KHGX%Y%m%d_%H%M%S_V06_grid.zarr') for rf in radar_files if rf.endswith('.zarr')]
-    radar_dts = np.array(radar_dts).astype('datetime64[s]').astype(dt)
-    radar_files = [path.join(radar_top_path, rf) for rf in radar_files if rf.endswith('.zarr')]
-    all_feature_eet = xr.zeros_like(tfm.feature)
-    if client is None:
-        max_iter = len(tfm.feature.data)
-        for i, feature_id in enumerate(tfm.feature.data):
-            print(f'({100*(i/max_iter):.1f}%) {i}/{max_iter}')
-            all_feature_eet[i] = find_eet_feature(feature_id)
+    radar_files = sorted(listdir(radar_top_path))
+    tfm_dts = tfm.time.data.astype('datetime64[s]').astype(dt)
+    feature_eet = np.full(tfm.feature.data.shape, np.nan)
+
+    
+    if client is not None:
+        res = client.map(prepare_eet_features, range(len(radar_files)))
+        client.gather(res)
+        for promised_res in res:
+            d, s, e = promised_res.result()
+            feature_eet[s:e] = d
     else:
-        futures = client.map(find_eet_feature, tfm.feature.data)
-        all_feature_eet = client.gather(futures)
-        print(all_feature_eet)
-    tfm['feature_echotop'] = all_feature_eet
+        for i in range(len(radar_files)):
+            d, s, e = prepare_eet_features(i)
+            feature_eet[s:e] = d
+
+    tfm = tfm.assign(
+        feature_eet = (('feature'), feature_eet)
+    )
     return tfm
 
 
@@ -212,7 +235,6 @@ def add_goes_data_to_tobac_path(tfm):
         gap = np.array(gap).astype('datetime64[s]')
         print(f'>>>>>>>Warning, long gap between {gap[0]} and {gap[1]}.>>>>>>>')
     
-    max_iter = len(tfm.feature.data)
     goes_max_x = tfm.g16_scan_x.max().data.item()
     goes_min_x = tfm.g16_scan_x.min().data.item()
     goes_max_y = tfm.g16_scan_y.max().data.item()
@@ -220,23 +242,25 @@ def add_goes_data_to_tobac_path(tfm):
     padding = .001
     goes_xsclice = slice(goes_min_x-padding, goes_max_x+padding)
     goes_yslice = slice(goes_max_y+padding, goes_min_y-padding)
-    for i, feat_id in enumerate(tfm.feature.data):
-        this_feat = tfm.sel(feature=feat_id)
-        this_feature_time_idx = this_feat.feature_time_index.data.item()
-        tfm_time = this_feat.isel(time=this_feature_time_idx)
-        this_feat_time_dt = tfm_time.time.data.astype("datetime64[s]").astype(dt).item()
-        print(this_feat_time_dt)
-        print(f'({100*(i/max_iter):.1f}%) {this_feat_time_dt.strftime('%Y-%m-%d %H:%M:%S')}')
-        # Load satellite data for this index
+    for this_feature_time_idx, time in enumerate(tfm.time.data):
+        print(time.astype('datetime64[s]').astype(dt))
+        feature_indicies_at_time = np.nonzero(tfm.feature_time_index.data == this_feature_time_idx)[0]
+        tfm_time = tfm.isel(feature=feature_indicies_at_time, time=this_feature_time_idx)
         if this_feature_time_idx not in download_results['tobac_idx'].values:
+            this_feat_time_dt = time.astype('datetime64[s]').astype(dt)
             print(f'>>>>>>>Warning, no satellite data for {this_feat_time_dt}>>>>>>>')
             continue
         goes_file_path = download_results[download_results['tobac_idx'] == this_feature_time_idx]['file'].values[0]
         goes_file_path = path.join('/Volumes/LtgSSD/', goes_file_path)
-        satellite_data = xr.open_dataset(goes_file_path)
-        area_i_want = satellite_data.sel(y=goes_yslice, x=goes_xsclice)
-        this_min_sat_temp = find_satellite_temp_for_feature(tfm_time, feat_id, area_i_want, feat_echotop=this_feat.feature_echotop.data.item())
-        min_sat_temp[i] = this_min_sat_temp
+        satellite_data = xr.open_dataset(goes_file_path).sel(y=goes_yslice, x=goes_xsclice)
+        for feat_id in enumerate(tfm.feature.data):
+            this_feat = tfm_time.sel(feature=feat_id)
+            this_feature_time_idx = this_feat.feature_time_index.data.item()
+            # Load satellite data for this index
+            this_min_sat_temp = find_satellite_temp_for_feature(tfm_time, feat_id, satellite_data, feat_echotop=this_feat.feature_echotop.data.item())
+            min_sat_temp[feat_id - 1] = this_min_sat_temp
+
+    
 
     tfm[f'min_L2-MCMIPC'] = xr.DataArray(min_sat_temp, dims=('feature'))
     return tfm
