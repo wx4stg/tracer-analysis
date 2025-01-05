@@ -18,6 +18,15 @@ import geopandas as gpd
 from matplotlib.path import Path
 from numba import njit
 
+from glmtools.io.lightning_ellipse import lightning_ellipse_rev
+from pyxlma import coords
+
+from track_features_merges_augmented import add_eet_to_radar_data, add_eet_to_tobac_data, add_goes_data_to_tobac_path
+
+USE_DASK = True
+if USE_DASK:
+    from dask.distributed import Client
+
 
 @njit
 def identify_side(dts, lons, lats, tfm_times, seabreeze, grid_lon, grid_lat):
@@ -450,6 +459,40 @@ def add_sfc_aerosol_data(tfm, ss_lower_bound=0.6, ss_upper_bound=0.8, ss_target=
     return tfm_w_aerosols
 
 
+def apply_coord_transforms(tfm):
+    tfm = tfm.copy()
+    radar_lat, radar_lon = 29.47, -95.08
+    tpcs = coords.TangentPlaneCartesianSystem(ctrLat=radar_lat, ctrLon=radar_lon, ctrAlt=0)
+    ltg_ell = lightning_ellipse_rev[1]
+    
+    x2d, y2d = np.meshgrid(tfm.x.data, tfm.y.data)
+    grid_ecef_coords = tpcs.toECEF(x2d.flatten(), y2d.flatten(), np.zeros_like(x2d).flatten())
+    
+    geosys = coords.GeographicSystem()
+    grid_lon, grid_lat, _ = geosys.fromECEF(*grid_ecef_coords)
+    grid_lon = grid_lon.reshape(x2d.shape)
+    grid_lat = grid_lat.reshape(x2d.shape)
+    tfm = tfm.assign({'lat' : (('x', 'y'), grid_lat), 'lon' : (('x', 'y'), grid_lon)})
+
+
+    satsys = coords.GeostationaryFixedGridSystem(subsat_lon=-75.19999694824219, sweep_axis='x')#, ellipse=ltg_ell)
+    grid_g16_scan_x, grid_g16_scan_y, _ = satsys.fromECEF(*grid_ecef_coords)
+    grid_g16_scan_x = grid_g16_scan_x.reshape(x2d.shape)
+    grid_g16_scan_y = grid_g16_scan_y.reshape(x2d.shape)
+    tfm = tfm.assign({'g16_scan_x' : (('x', 'y'), grid_g16_scan_x), 'g16_scan_y' : (('x', 'y'), grid_g16_scan_y)})
+
+    tfm.attrs['center_lat'] = radar_lat
+    tfm.attrs['center_lon'] = radar_lon
+
+    feat_x = tfm.feature_projection_x_coordinate.compute().data
+    feat_y = tfm.feature_projection_y_coordinate.compute().data
+    feat_z = np.zeros_like(feat_x)
+    feature_ecef_coords = tpcs.toECEF(feat_x, feat_y, feat_z)
+    feature_lon, feature_lat, _ = geosys.fromECEF(*feature_ecef_coords)
+    tfm = tfm.assign({'feature_lat' : (('feature'), feature_lat), 'feature_lon' : (('feature'), feature_lon)})
+    return tfm
+
+
 def add_timeseries_data_to_toabc_path(tobac_data, date_i_want):
     tobac_data = tobac_data.copy()
     tobac_save_path = f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime('%Y%m%d')}/'
@@ -458,8 +501,7 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want):
             tobac_timeseries_path = path.join(tobac_save_path, f)
             break
     else:
-        print('>>>>>>>Unable to find timeseries data...>>>>>>>')
-        return tobac_data
+        raise ValueError('>>>>>>>Unable to find timeseries data...>>>>>>>')
     timeseries_data = xr.open_dataset(tobac_timeseries_path, chunks='auto')
     timeseries_data = timeseries_data.reindex(feature=tobac_data.feature.data, fill_value=np.nan)
     for dv in timeseries_data.data_vars:
@@ -493,7 +535,6 @@ def generate_seg_mask_cell_track(tobac_data, convert_to='cell'):
 
 
 def convert_to_track_time(tfmo):
-    tfmo['feature_parent_track_id'] = tfmo.feature_parent_track_id.astype('int32')
     for old_name in ['min_L2-MCMIPC', 'max_reflectivity']:
         new_name = 'feature_'+old_name
         new_name = new_name.replace('-', '_')
@@ -527,10 +568,16 @@ def convert_to_track_time(tfmo):
     track_mlcin = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
     track_mlecape = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
 
-    tfmo.feature_parent_track_id.load()
-    tfmo.feature_time_index.load()
-    features_with_parents = np.where(tfmo.feature_parent_cell_id.compute().data != -1)[0]
-    for feature_idx in features_with_parents:
+    tfmo['feature_parent_track_id'] = tfmo.feature_parent_track_id.compute().astype('int32')
+    vars_to_load_now = ['feature_time_index', 'feature_seabreeze', 'feature_area', 'feature_echotop', 'feature_flash_count', 'feature_flash_count_area_GT_4km',
+                        'feature_flash_count_area_LE_4km', 'feature_kdpvol', 'feature_lat', 'feature_lon', 'feature_rhvdeficitvol', 'feature_zdrvol', 'feature_min_L2_MCMIPC',
+                        'feature_pressure_profile', 'feature_msl_profile', 'feature_temp_profile', 'feature_dew_profile', 'feature_u_profile', 'feature_v_profile', 'feature_ccn_profile',
+                        'feature_mlcape', 'feature_mlcin', 'feature_mlecape']
+    for var in vars_to_load_now:
+        tfmo[var] = tfmo[var].compute()
+    features_with_parents = np.sort(np.where(tfmo.feature_parent_cell_id.compute().data != -1)[0])
+    for i, feature_idx in enumerate(features_with_parents):
+        print(f'Processing feature {i+1}/{len(features_with_parents)}')
         parent_track = tfmo.feature_parent_track_id.data[feature_idx]
         time_idx = tfmo.feature_time_index.data[feature_idx]
 
@@ -758,16 +805,28 @@ def convert_to_track_time(tfmo):
 
 
 if __name__ == '__main__':
+    if USE_DASK:
+        client = Client('tcp://127.0.0.1:8786')
+    else:
+        client = None
     date_i_want = sys.argv[1]
     date_i_want = dt.strptime(date_i_want, '%Y-%m-%d')
     tfm_path = f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/seabreeze.zarr'
-    tfm = xr.open_dataset(tfm_path, engine='zarr', chunks='auto')
-    tfm_ts = add_timeseries_data_to_toabc_path(tfm, date_i_want)
-    tfm_fseabreeze = add_seabreeze_to_features(tfm_ts)
-    tfm_w_profiles = add_radiosonde_data(tfm_fseabreeze)
+    tfm = xr.open_dataset(tfm_path, engine='zarr')
+    tfm_coord = apply_coord_transforms(tfm)
+    tfm_ts = add_timeseries_data_to_toabc_path(tfm_coord, date_i_want)
+    if not path.exists(f'/Volumes/LtgSSD/nexrad_zarr/{date_i_want.strftime('%B').upper()}/{date_i_want.strftime('%Y%m%d')}'):
+        print('I don\'t have EET for this day, computing it')
+        add_eet_to_radar_data(date_i_want, client)
+    tfm_eet = add_eet_to_tobac_data(tfm_ts, date_i_want, client)
+    print('Adding satellite data to tobac data')
+    tfm_ctt = add_goes_data_to_tobac_path(tfm_eet, client)
+    tfm_seabreeze = add_seabreeze_to_features(tfm_ctt)
+    tfm_w_profiles = add_radiosonde_data(tfm_seabreeze)
     tfm_w_sfc = add_madis_data(tfm_w_profiles)
     tfm_w_aerosols = add_sfc_aerosol_data(tfm_w_sfc)
     tfm_sounding_stats = compute_sounding_stats(tfm_w_aerosols)
     tfm_w_parents = generate_seg_mask_cell_track(generate_seg_mask_cell_track(tfm_sounding_stats, convert_to='track'), convert_to='cell')
+    print('Converting to track time')
     tfm_obs = convert_to_track_time(tfm_w_parents)
-    tfm_obs.chunk('auto').to_zarr(tfm_path.replace('.zarr', '-obs.zarr'))
+    tfm_obs.to_zarr(tfm_path.replace('.zarr', '-obs.zarr'))

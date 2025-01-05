@@ -9,6 +9,8 @@ from shapely.geometry import Polygon
 from pyxlma import coords
 import sys
 
+from associate_obs import apply_coord_transforms
+
 from numba import njit
 
 @njit
@@ -41,8 +43,9 @@ def interpolate_sbf_polygons(longer_polyline, shorter_polyline, times_i_want_bet
 if __name__ == '__main__':
     date_i_want = sys.argv[1]
     date_i_want = dt.strptime(date_i_want, '%Y-%m-%d')
-    tfm_path = f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/Track_features_merges_augmented.zarr'
-    tfm = xr.open_dataset(tfm_path, engine='zarr', chunks='auto')
+    tfm_path = f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/Track_features_merges.nc'
+    tfm = xr.open_dataset(tfm_path, chunks='auto')
+    tfm = apply_coord_transforms(tfm)
     polyline_path = f'/Volumes/LtgSSD/analysis/sam_polyline/{date_i_want.strftime("%Y-%m-%d")}.json'
     polyline = gpd.read_file(polyline_path)
     polyline = polyline.set_index('index')
@@ -142,14 +145,14 @@ if __name__ == '__main__':
     feature_seabreeze = xr.zeros_like(tfm.feature, dtype=int)
     for i, feat_id in enumerate(tfm.feature.data):
         this_feat = tfm.sel(feature=feat_id)
-        this_feat_time_idx = this_feat.feature_time_index.data.compute().item()
+        this_feat_time_idx = this_feat.feature_time_index.compute().data.item()
         this_feat_time = tfm.time.data[this_feat_time_idx].astype('datetime64[s]').astype(dt)
         if this_feat_time < start_time:
             this_feat_time = start_time
         elif this_feat_time > end_time:
             this_feat_time = end_time
-        this_feat_lon = this_feat.feature_lon.data.compute().item()
-        this_feat_lat = this_feat.feature_lat.data.compute().item()
+        this_feat_lon = this_feat.feature_lon.compute().data.item()
+        this_feat_lat = this_feat.feature_lat.compute().data.item()
         this_polyline = polyline[polyline.index.values == this_feat_time]['geometry'].values[0]
         this_polyline_mpl = Path(np.array(this_polyline.exterior.coords))
         this_seabreeze = int(this_polyline_mpl.contains_point((this_feat_lon, this_feat_lat))) - 2
@@ -157,7 +160,7 @@ if __name__ == '__main__':
 
     tfm['feature_seabreeze'] = feature_seabreeze
     print('Saving zarr...')
-    tfm.chunk('auto').to_zarr(tfm_path.replace('Track_features_merges_augmented.zarr', 'seabreeze.zarr'))
+    tfm.chunk('auto').to_zarr(tfm_path.replace('Track_features_merges.nc', 'seabreeze.zarr'))
 
     polyline = polyline.sort_index()
     polyline.to_file(polyline_path.replace('.json', '_interpolated.json'), driver='GeoJSON')

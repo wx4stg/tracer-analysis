@@ -25,6 +25,8 @@ from metpy import calc as mpcalc
 from metpy.interpolate import interpolate_to_grid
 from matplotlib.patheffects import withStroke
 
+from associate_obs import apply_coord_transforms
+
 
 lim_mins = (-98.3, 25.5)
 lim_maxs = (-91, 32)
@@ -247,18 +249,18 @@ def queue_radar(times, date_i_want, client=None):
 if __name__ == '__main__':
     date_i_want = dt.strptime(sys.argv[1], '%Y-%m-%d')
     client = Client('tcp://127.0.0.1:8786')
-    tfm = xr.open_dataset(f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/Track_features_merges_augmented.zarr',
-                            engine='zarr', chunks='auto')
+    tfm = xr.open_dataset(f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/Track_features_merges.nc', chunks='auto')
+    tfm = apply_coord_transforms(tfm)
     times = tfm.time.data
     all_res = []
 
     radar_res = queue_radar(times, date_i_want, client)
     all_res.extend(radar_res)
     
-    sat_min_x = tfm.g16_scan_x.min().data.compute()
-    sat_max_x = tfm.g16_scan_x.max().data.compute()
-    sat_min_y = tfm.g16_scan_y.min().data.compute()
-    sat_max_y = tfm.g16_scan_y.max().data.compute()
+    sat_min_x = tfm.g16_scan_x.min().compute().data
+    sat_max_x = tfm.g16_scan_x.max().compute().data
+    sat_min_y = tfm.g16_scan_y.min().compute().data
+    sat_max_y = tfm.g16_scan_y.max().compute().data
     sat_res = queue_satellite(times, date_i_want, sat_min_x, sat_max_x, sat_min_y, sat_max_y, client)
     all_res.extend(sat_res)
 

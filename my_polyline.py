@@ -1,5 +1,5 @@
 from os import path, listdir
-from datetime import datetime as dt, timedelta
+from datetime import datetime as dt
 import sys
 
 import holoviews as hv
@@ -12,10 +12,7 @@ from shapely.geometry import Polygon, LineString
 import numpy as np
 import xarray as xr
 
-from goes2go import GOES
-
-from pyxlma import coords
-from glmtools.io.lightning_ellipse import lightning_ellipse_rev
+from associate_obs import apply_coord_transforms
 
 from functools import partial
 
@@ -88,7 +85,7 @@ def plot_seg_mask(dataset, time, seg_tick):
     this_time = dataset.sel(time=time)
     lons = this_time.lon.data
     lats = this_time.lat.data
-    seg_mask = this_time.segmentation_mask.data.compute()
+    seg_mask = this_time.segmentation_mask.compute().data
     plot = gv.QuadMesh((lons, lats, seg_mask), kdims=['Longitude', 'Latitude'], vdims=['segmentation_mask']).opts(
         cmap='plasma', colorbar=False, tools=['hover'], visible=seg_tick)
     print(f'Segmentation plot done for {time}')
@@ -127,15 +124,9 @@ def write_json(_):
 
 if __name__ == '__main__':
     date_i_want = dt.strptime(sys.argv[1], '%Y-%m-%d')
-    tfma_path = f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/Track_features_merges_augmented.zarr'
-    if path.exists(tfma_path):
-        tfm = xr.open_dataset(tfma_path, engine='zarr', chunks='auto')
-    elif path.exists(tfma_path.replace('augmented.zarr', 'coordinated.zarr')):
-        tfm = xr.open_dataset(tfma_path.replace('augmented.zarr', 'coordinated.zarr'), engine='zarr', chunks='auto')
-    elif path.exists(tfma_path.replace('Track_features_merges_augmented.zarr', 'tfma_checkpoint.zarr')):
-        tfm = xr.open_dataset(tfma_path.replace('Track_features_merges_augmented.zarr', 'tfma_checkpoint.zarr'), engine='zarr', chunks='auto')
-    else:
-        raise FileNotFoundError(f'No file found at {tfma_path}')
+    tfma_path = f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/Track_features_merges.nc'
+    tfm = xr.open_dataset(tfma_path, chunks='auto')
+    tfm = apply_coord_transforms(tfm)
     unique_times = np.unique(tfm.time.data).astype('datetime64[us]').astype(dt).tolist()
 
     grid_max_lon = tfm.lon.max().compute()
@@ -150,10 +141,10 @@ if __name__ == '__main__':
     #                       chunks='auto')
     
     
-    sat_min_x = tfm.g16_scan_x.min().data.compute()
-    sat_max_x = tfm.g16_scan_x.max().data.compute()
-    sat_min_y = tfm.g16_scan_y.min().data.compute()
-    sat_max_y = tfm.g16_scan_y.max().data.compute()
+    sat_min_x = tfm.g16_scan_x.min().compute().data
+    sat_max_x = tfm.g16_scan_x.max().compute().data
+    sat_min_y = tfm.g16_scan_y.min().compute().data
+    sat_max_y = tfm.g16_scan_y.max().compute().data
 
     date_slider = pn.widgets.Select(name='Date', options=unique_times, value=unique_times[0])
     channel_select = pn.widgets.Select(name='Satellite Channel', options=['CMI_C02', 'CMI_C13'], value='CMI_C02')
@@ -204,7 +195,7 @@ if __name__ == '__main__':
               seg.opts(alpha=0.5, tools=['hover']) *
               stations *
               polygon * lower_limit * eastern_limit
-              ).opts(width=1300, height=825, xlim=(xmin, xmax), ylim=(ymin, ymax))
+              ).opts(width=2200, height=1200, xlim=(xmin, xmax), ylim=(ymin, ymax))
     control_column = pn.Column(date_slider, seg_tick, channel_select, satellite_tick, radar_sel, hgx_tick, lch_tick, iah_tick, hou_tick, stations_tick, div_tick, write_btn)
     col = pn.Row(pn.Column(my_map), control_column)
 

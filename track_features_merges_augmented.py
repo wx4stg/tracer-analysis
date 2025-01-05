@@ -16,8 +16,6 @@ from glmtools.io.lightning_ellipse import lightning_ellipse_rev
 from pyxlma import coords
 from scipy.interpolate import griddata
 
-USE_DASK = True
-
 def fixup_transformed_coords(transformed_coords, input_shape):
     for transformed in transformed_coords:
         if not isinstance(transformed, np.ndarray):
@@ -93,7 +91,7 @@ def add_eet_to_radar_data(tobac_day, client=None):
 def add_eet_to_tobac_data(tfm, date_i_want, client=None):
     def find_eet_feature(tfm, radar_path, time_idx):
         radar = xr.open_dataset(radar_path, engine='zarr')
-        feature_indicies_at_time = np.nonzero(tfm.feature_time_index.data == time_idx)[0]
+        feature_indicies_at_time = np.nonzero(tfm.feature_time_index.compute().data == time_idx)[0]
         features_at_time = tfm.isel(feature=feature_indicies_at_time, time=time_idx)
         feature_eet = np.full(features_at_time.feature.data.shape, np.nan)
         for j, feat_to_find in enumerate(features_at_time.feature.data):
@@ -280,31 +278,3 @@ def add_goes_data_to_tobac_path(tfm, client=None):
             min_sat_temp[s:e] = d
     tfm[f'min_L2-MCMIPC'] = xr.DataArray(min_sat_temp, dims=('feature'))
     return tfm
-
-
-if __name__ == '__main__':
-    if USE_DASK:
-        client = Client('tcp://127.0.0.1:8786')
-    else:
-        client = None
-    date_i_want = sys.argv[1]
-    date_i_want = dt.strptime(date_i_want, '%Y-%m-%d')
-    print('Reading')
-    path_to_read = f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime('%Y%m%d')}/Track_features_merges.nc'
-    tobac_data = xr.open_dataset(path_to_read)
-    print('Applying coord transforms')
-    tobac_data = apply_coord_transforms(tobac_data)
-    coords_path = path_to_read.replace('.nc', '_coords.nc')
-    if path.exists(coords_path):
-        rmtree(coords_path)
-    tobac_data.chunk('auto').to_zarr(coords_path)
-    if not path.exists(f'/Volumes/LtgSSD/nexrad_zarr/{date_i_want.strftime('%B').upper()}/{date_i_want.strftime('%Y%m%d')}'):
-        print('I don\'t have EET for this day, computing it')
-        add_eet_to_radar_data(date_i_want, client)
-    print('Finding echo top heights')
-    tobac_data = add_eet_to_tobac_data(tobac_data, date_i_want, client)
-    print('Adding satellite data to tobac data')
-    tobac_data = add_goes_data_to_tobac_path(tobac_data, client)
-    print('Saving')
-    path_to_write = path_to_read.replace('.nc', '_augmented.zarr')
-    tobac_data.chunk('auto').to_zarr(path_to_write)
