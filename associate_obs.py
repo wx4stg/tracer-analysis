@@ -577,7 +577,6 @@ def convert_to_track_time(tfmo):
         tfmo[var] = tfmo[var].compute()
     features_with_parents = np.sort(np.where(tfmo.feature_parent_cell_id.compute().data != -1)[0])
     for i, feature_idx in enumerate(features_with_parents):
-        print(f'Processing feature {i+1}/{len(features_with_parents)}')
         parent_track = tfmo.feature_parent_track_id.data[feature_idx]
         time_idx = tfmo.feature_time_index.data[feature_idx]
 
