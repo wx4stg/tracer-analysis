@@ -177,9 +177,9 @@ if __name__ == '__main__':
     sfc_lasso.add_subscriber(handle_with_time)
 
     lower_limit_line = LineString([(-120, 26.5), (-91.5, 26.5)])
-    lower_limit = gv.Shape(lower_limit_line).opts(color='red')
+    lower_limit = gv.Shape(lower_limit_line)
     eastern_limit_line = LineString([(-91.5, 26.5), (-91.5, 70)])
-    eastern_limit = gv.Shape(eastern_limit_line).opts(color='red')
+    eastern_limit = gv.Shape(eastern_limit_line)
 
     write_btn = pn.widgets.Button(name='Write JSON')
     pn.bind(write_json, write_btn, watch=True)
