@@ -157,7 +157,7 @@ def queue_satellite(time, dataset_time, min_x, max_x, min_y, max_y, client=None)
 
 
 def plot_radar(time, dataset_time, radar, var_to_plot):
-    _ = cmweather.__version__
+    _ = cmweather.cm_colorblind
     mpl_use('agg')
     path_to_radar = path.join('/Volumes', 'LtgSSD', 'nexrad_l2', dataset_time.strftime('%Y%m%d'))
     radar_files = [path.join(path_to_radar, f) for f in sorted(listdir(path_to_radar)) if f.startswith(radar)]
