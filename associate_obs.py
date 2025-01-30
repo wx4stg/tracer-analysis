@@ -337,6 +337,11 @@ def compute_sounding_stats(tfm):
             u_i = u[i, :]
             v_i = v[i, :]
 
+            if np.any(pressure_i.m == -999.):
+                mlcapes[i] = np.nan
+                mlcins[i] = np.nan
+                mlecapes[i] = np.nan
+                continue
             mlcape, mlcin = mpcalc.mixed_layer_cape_cin(pressure_i, temp_i, dew_i)
             spc_hum = mpcalc.specific_humidity_from_dewpoint(pressure_i, dew_i)
             mlecape = calc_ecape(height_i, pressure_i, temp_i, spc_hum, u_i, v_i, cape_type='mixed_layer')
