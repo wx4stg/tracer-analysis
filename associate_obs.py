@@ -344,8 +344,19 @@ def compute_sounding_stats(tfm):
                 continue
             mlcape, mlcin = mpcalc.mixed_layer_cape_cin(pressure_i, temp_i, dew_i)
             spc_hum = mpcalc.specific_humidity_from_dewpoint(pressure_i, dew_i)
-            mlecape = calc_ecape(height_i, pressure_i, temp_i, spc_hum, u_i, v_i, cape_type='mixed_layer')
-
+            try:
+                mlecape = calc_ecape(height_i, pressure_i, temp_i, spc_hum, u_i, v_i, cape_type='mixed_layer')
+            except IndexError:
+                print(f'manually added EL to ecape calculation at time {tfm.time.data[i]}')
+                temp_botch = temp_i.copy()
+                temp_botch[-1] = 100 * units.degC
+                dew_botch = dew_i.copy()
+                dew_botch[-1] = -50 * units.degC
+                spc_hum_botch = mpcalc.specific_humidity_from_dewpoint(pressure_i, dew_botch)
+                try:
+                    mlecape = calc_ecape(height_i, pressure_i, temp_botch, spc_hum_botch, u_i, v_i, cape_type='mixed_layer')
+                except ValueError:
+                    mlecape = np.nan * units('J/kg')
             mlcapes[i] = mlcape.magnitude
             mlcins[i] = mlcin.magnitude
             mlecapes[i] = mlecape.magnitude
