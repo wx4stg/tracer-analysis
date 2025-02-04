@@ -199,7 +199,7 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
             this_sonde_data['v_wind'] = v
             this_sonde_data['alt'] = this_sonde_data.geometric_height
         else:
-            this_sonde_data = pd.read_csv('/Volumes/LtgSSD/TAMU_SONDES/TAMU_TRACER_20220602_2028_95.93W_30.07N_TSPOTINT.txt', skiprows=28, encoding='latin1', sep='\\s+', names=[
+            this_sonde_data = pd.read_csv(f, skiprows=28, encoding='latin1', sep='\\s+', names=[
                 'FlightTime', 'pres', 'tdry', 'RH', 'WindSpeed', 'WindDirection', 'AGL', 'AGL2', 'alt', 'Longitude', 'Latitude', 'y', 'x', 'Tv', 'dp', 'rho',
                 'e', 'v_wind', 'u_wind', 'range', 'rv', 'MSL2', 'UTC_DAY', 'UTC_TIME', 'UTC_AMPM', 'ELAPSED_TIME', 'ELAPSED_TIME2', 'ELAPSED_TIME3', 'FrostPoint']
                 )
