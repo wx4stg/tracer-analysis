@@ -29,7 +29,7 @@ if USE_DASK:
     from dask.distributed import Client
 
 
-@njit
+@njit(parallel=True)
 def identify_side(dts, lons, lats, tfm_times, seabreeze, grid_lon, grid_lat):
     seabreezes = np.zeros(lons.shape)
     for i in np.arange(seabreezes.shape[0]):
