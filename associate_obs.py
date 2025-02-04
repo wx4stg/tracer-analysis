@@ -100,7 +100,7 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
         arm_sonde_lats = np.array(arm_sonde_lats)
 
         arm_sonde_sbf_side = identify_side(arm_sonde_dts_this_day.astype('datetime64[s]').astype(float), arm_sonde_lons, arm_sonde_lats, tfm.time.compute().data.astype('datetime64[s]').astype(float),
-                                                    tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.compute().data, tfm.lat.compute().data)        
+                                                    tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.compute().data, tfm.lat.compute().data)
     else:
         print('Warning, no ARM sondes found!')
         arm_sonde_files_this_day = np.empty(0, dtype=str)
@@ -138,9 +138,38 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
         tamu_sonde_dts_this_day = np.empty(0, dtype='datetime64[s]')
         tamu_sonde_sbf_side = np.empty(0, dtype=int)
 
-    all_sonde_files = np.concatenate([arm_sonde_files_this_day, tamu_sonde_files_this_day])
-    all_sonde_dts = np.concatenate([arm_sonde_dts_this_day, tamu_sonde_dts_this_day])
-    all_sonde_sbf_side = np.concatenate([arm_sonde_sbf_side, tamu_sonde_sbf_side])
+    # Load the CMAS sondes
+    CMAS_sonde_path = '/Volumes/LtgSSD/CMAS-sondes/'
+    CMAS_sonde_files = [f for f in sorted(listdir(CMAS_sonde_path)) if f.startswith('GrawSonde') and f.endswith('.nc')]
+    CMAS_sonde_dts = np.array([dt.strptime('_'.join(f.split('_')[3:5]), '%Y%m%d_%H%M%S.nc') for f in CMAS_sonde_files]).astype('datetime64[s]')
+    CMAS_sonde_files = np.array([path.join(CMAS_sonde_path, f) for f in CMAS_sonde_files if f.startswith('GrawSonde') and f.endswith('.nc')])
+    CMAS_day_filter = np.where((CMAS_sonde_dts >= time_start_this_day) & (CMAS_sonde_dts <= time_end_this_day))[0]
+    CMAS_sonde_files_this_day = CMAS_sonde_files[CMAS_day_filter]
+    if len(CMAS_sonde_files_this_day) > 0:
+        CMAS_sonde_dts_this_day = CMAS_sonde_dts[CMAS_day_filter]
+        CMAS_sonde_lons = []
+        CMAS_sonde_lats = []
+
+        for sonde_file in CMAS_sonde_files_this_day:
+            tmp_sonde = xr.open_dataset(sonde_file)
+            CMAS_sonde_lons.append(tmp_sonde.longitude.data[0])
+            CMAS_sonde_lats.append(tmp_sonde.latitude.data[0])
+            tmp_sonde.close()
+
+        CMAS_sonde_lons = np.array(CMAS_sonde_lons)
+        CMAS_sonde_lats = np.array(CMAS_sonde_lats)
+
+        CMAS_sonde_sbf_side = identify_side(CMAS_sonde_dts_this_day.astype('datetime64[s]').astype(float), CMAS_sonde_lons, CMAS_sonde_lats, tfm.time.compute().data.astype('datetime64[s]').astype(float),
+                                                    tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.compute().data, tfm.lat.compute().data)
+    else:
+        print('Warning, no CMAS sondes found!')
+        CMAS_sonde_files_this_day = np.empty(0, dtype=str)
+        CMAS_sonde_dts_this_day = np.empty(0, dtype='datetime64[s]')
+        CMAS_sonde_sbf_side = np.empty(0, dtype=int)
+
+    all_sonde_files = np.concatenate([arm_sonde_files_this_day, tamu_sonde_files_this_day, CMAS_sonde_files_this_day])
+    all_sonde_dts = np.concatenate([arm_sonde_dts_this_day, tamu_sonde_dts_this_day, CMAS_sonde_dts_this_day])
+    all_sonde_sbf_side = np.concatenate([arm_sonde_sbf_side, tamu_sonde_sbf_side, CMAS_sonde_sbf_side])
 
     maritime_sonde_dts = all_sonde_dts[all_sonde_sbf_side == -1]
     maritime_sorting = np.argsort(maritime_sonde_dts)
@@ -150,7 +179,7 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
     continental_sorting = np.argsort(continental_sonde_dts)
     continental_sonde_dts = continental_sonde_dts[continental_sorting]
 
-    n_sounding_vars = 6
+    n_sounding_vars = 6 # pressure, temperature, dewpoint, u, v, z
     maritime_representative_profile = np.full((tfm.time.shape[0], n_sounding_levels, n_sounding_vars), -999, dtype=float)
     last_maritime_profile_time_index = -1
 
@@ -160,6 +189,15 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
     for f, this_dt, sbf in zip(all_sonde_files, all_sonde_dts, all_sonde_sbf_side):
         if f.endswith('.cdf'):
             this_sonde_data = xr.open_dataset(f)
+        elif f.endswith('.nc'):
+            this_sonde_data = xr.open_dataset(f)
+            this_sonde_data['pres'] = this_sonde_data.pressure
+            this_sonde_data['tdry'] = this_sonde_data.temperature
+            this_sonde_data['dp'] = this_sonde_data.dewpoint_temperature
+            u, v = mpcalc.wind_components(this_sonde_data.wind_speed * units.meter / units.second, this_sonde_data.wind_direction * units.degree)
+            this_sonde_data['u_wind'] = u
+            this_sonde_data['v_wind'] = v
+            this_sonde_data['alt'] = this_sonde_data.geometric_height
         else:
             this_sonde_data = pd.read_csv('/Volumes/LtgSSD/TAMU_SONDES/TAMU_TRACER_20220602_2028_95.93W_30.07N_TSPOTINT.txt', skiprows=28, encoding='latin1', sep='\\s+', names=[
                 'FlightTime', 'pres', 'tdry', 'RH', 'WindSpeed', 'WindDirection', 'AGL', 'AGL2', 'alt', 'Longitude', 'Latitude', 'y', 'x', 'Tv', 'dp', 'rho',
@@ -342,11 +380,12 @@ def compute_sounding_stats(tfm):
                 mlcins[i] = np.nan
                 mlecapes[i] = np.nan
                 continue
-            mlcape, mlcin = mpcalc.mixed_layer_cape_cin(pressure_i, temp_i, dew_i)
             spc_hum = mpcalc.specific_humidity_from_dewpoint(pressure_i, dew_i)
             try:
+                mlcape, mlcin = mpcalc.mixed_layer_cape_cin(pressure_i, temp_i, dew_i)
                 mlecape = calc_ecape(height_i, pressure_i, temp_i, spc_hum, u_i, v_i, cape_type='mixed_layer')
-            except IndexError:
+            except Exception as e:
+                print(e)
                 print(f'manually added EL to ecape calculation at time {tfm.time.data[i]}')
                 temp_botch = temp_i.copy()
                 temp_botch[-1] = 100 * units.degC
@@ -355,8 +394,13 @@ def compute_sounding_stats(tfm):
                 spc_hum_botch = mpcalc.specific_humidity_from_dewpoint(pressure_i, dew_botch)
                 try:
                     mlecape = calc_ecape(height_i, pressure_i, temp_botch, spc_hum_botch, u_i, v_i, cape_type='mixed_layer')
+                    mlcape, mlcin = mpcalc.mixed_layer_cape_cin(pressure_i, temp_i, dew_i)
                 except ValueError:
                     mlecape = np.nan * units('J/kg')
+                    mlcape = np.nan * units('J/kg')
+                    mlcin = np.nan * units('J/kg')
+            if type(mlecape) == int and mlecape == 0:
+                mlecape = 0 * units('J/kg')
             mlcapes[i] = mlcape.magnitude
             mlcins[i] = mlcin.magnitude
             mlecapes[i] = mlecape.magnitude
@@ -844,4 +888,4 @@ if __name__ == '__main__':
     tfm_w_parents = generate_seg_mask_cell_track(generate_seg_mask_cell_track(tfm_sounding_stats, convert_to='track'), convert_to='cell')
     print('Converting to track time')
     tfm_obs = convert_to_track_time(tfm_w_parents)
-    tfm_obs.to_zarr(tfm_path.replace('.zarr', '-obs.zarr'))
+    tfm_obs.to_zarr(tfm_path.replace('.zarr', '-obs.zarr'), zarr_format=2)

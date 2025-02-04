@@ -90,8 +90,10 @@ def add_eet_to_radar_data(tobac_day, client=None):
 
 def add_eet_to_tobac_data(tfm, date_i_want, client=None):
     def find_eet_feature(tfm, radar_path, time_idx):
-        radar = xr.open_dataset(radar_path, engine='zarr')
         feature_indicies_at_time = np.nonzero(tfm.feature_time_index.compute().data == time_idx)[0]
+        if len(feature_indicies_at_time) == 0:
+            return 0, 0, 0
+        radar = xr.open_dataset(radar_path, engine='zarr')
         features_at_time = tfm.isel(feature=feature_indicies_at_time, time=time_idx)
         feature_eet = np.full(features_at_time.feature.data.shape, np.nan)
         for j, feat_to_find in enumerate(features_at_time.feature.data):
@@ -210,6 +212,8 @@ def add_goes_data_to_tobac_path(tfm, client=None):
     def prepare_find_satellite(this_feature_time_idx):
         time = tfm.time.data[this_feature_time_idx]
         feature_indicies_at_time = np.nonzero(tfm.feature_time_index.data == this_feature_time_idx)[0]
+        if len(feature_indicies_at_time) == 0:
+            return 0, 0, 0
         tfm_time = tfm.isel(feature=feature_indicies_at_time, time=this_feature_time_idx)
         this_timestep_sat_temps = np.full(tfm_time.feature.shape[0], np.nan)
         if this_feature_time_idx not in download_results['tobac_idx'].values:
