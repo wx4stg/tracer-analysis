@@ -11,6 +11,7 @@ from metpy.interpolate import interpolate_1d
 from metpy.units import units
 from metpy import calc as mpcalc
 from ecape.calc import calc_ecape
+import sounderpy as spy
 from scipy.interpolate import interp1d
 import sys
 import warnings
@@ -75,6 +76,7 @@ def add_seabreeze_to_features(tfm):
 
 
 def add_radiosonde_data(tfm, n_sounding_levels=2000):
+    date_i_want = tfm.time.data[0].astype('datetime64[D]').astype(dt)
     time_start_this_day = np.min(tfm.time.data)
     time_end_this_day = np.max(tfm.time.data)
 
@@ -167,9 +169,37 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
         CMAS_sonde_dts_this_day = np.empty(0, dtype='datetime64[s]')
         CMAS_sonde_sbf_side = np.empty(0, dtype=int)
 
-    all_sonde_files = np.concatenate([arm_sonde_files_this_day, tamu_sonde_files_this_day, CMAS_sonde_files_this_day])
-    all_sonde_dts = np.concatenate([arm_sonde_dts_this_day, tamu_sonde_dts_this_day, CMAS_sonde_dts_this_day])
-    all_sonde_sbf_side = np.concatenate([arm_sonde_sbf_side, tamu_sonde_sbf_side, CMAS_sonde_sbf_side])
+    # Load ACARS profiles
+    acars_all_list = []
+    airports_i_want = {'IAH' : {'latitude' : 29.9844353, 'longitude' : -95.3414425},
+                    'HOU' : {'latitude' : 29.6457998, 'longitude' : -95.2772316},
+                    'LBX' : {'latitude' : 29.1086389, 'longitude' : -95.4620833},
+                    'GLS' : {'latitude' : 29.2653333, 'longitude' : -94.8604167},
+                    'EFD' : {'latitude' : 29.6073333, 'longitude' : -95.1587500},
+                    'IWS' : {'latitude' : 29.8181944, 'longitude' : -95.6726111},
+                    'SGR' : {'latitude' : 29.6222486, 'longitude' : -95.6565342},
+                    'DWH' : {'latitude' : 30.0617791, 'longitude' : -95.5527884},
+                    'CXO' : {'latitude' : 30.3533955, 'longitude' : -95.4150819},
+                    'HPY' : {'latitude' : 29.7860833, 'longitude' : -94.9526667}
+                    }
+    for hour_to_pull in range(24):
+        acars_conn = spy.acars_data(str(date_i_want.year).zfill(4), str(date_i_want.month).zfill(2), str(date_i_want.day).zfill(2), str(hour_to_pull).zfill(2))
+        this_hour_acars_list = [prof for prof in acars_conn.list_profiles() if prof[:3] in airports_i_want.keys()]
+        acars_all_list.extend(this_hour_acars_list)
+    acars_profile_dts = []
+    acars_profile_lons = []
+    acars_profile_lats = []
+    acars_profile_files = []
+    for acars_loctime in acars_all_list:
+        acars_profile_dts.append(date_i_want.replace(hour=int(acars_loctime[-4:-2]), minute=int(acars_loctime[-2:])))
+        acars_profile_lats.append(airports_i_want[acars_loctime[:3]]['latitude'])
+        acars_profile_lons.append(airports_i_want[acars_loctime[:3]]['longitude'])
+        acars_profile_files.append('ACARS+'+acars_loctime)
+    acars_profile_sbf = identify_side(np.array(acars_profile_dts).astype('datetime64[s]'), np.array(acars_profile_lons), np.array(acars_profile_lats), tfm.time.compute().data.astype('datetime64[s]').astype(float),
+                                        tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.compute().data, tfm.lat.compute().data)
+    all_sonde_files = np.concatenate([arm_sonde_files_this_day, tamu_sonde_files_this_day, CMAS_sonde_files_this_day, acars_profile_files])
+    all_sonde_dts = np.concatenate([arm_sonde_dts_this_day, tamu_sonde_dts_this_day, CMAS_sonde_dts_this_day, acars_profile_dts])
+    all_sonde_sbf_side = np.concatenate([arm_sonde_sbf_side, tamu_sonde_sbf_side, CMAS_sonde_sbf_side, acars_profile_sbf])
 
     maritime_sonde_dts = all_sonde_dts[all_sonde_sbf_side == -1]
     maritime_sorting = np.argsort(maritime_sonde_dts)
@@ -187,7 +217,18 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
     last_continental_profile_time_index = -1
 
     for f, this_dt, sbf in zip(all_sonde_files, all_sonde_dts, all_sonde_sbf_side):
-        if f.endswith('.cdf'):
+        if f.startswith('ACARS'):
+            acars_conn = spy.acars_data(str(this_dt.year).zfill(4), str(this_dt.month).zfill(2), str(this_dt.day).zfill(2), str(this_dt.hour).zfill(2))
+            sounding = acars_conn.get_profile(f.replace('ACARS+', ''), hush=True, clean_it=True)
+            this_sonde_data = pd.DataFrame(
+                {'pres' : sounding['p'].to('hPa').m,
+                'tdry' : sounding['T'].to('degC').m,
+                'dp' : sounding['Td'].to('degC').m,
+                'u_wind' : sounding['u'].to('m/s').m,
+                'v_wind' : sounding['v'].to('m/s').m,
+                'alt' : sounding['z'].to('m').m}
+            )
+        elif f.endswith('.cdf'):
             this_sonde_data = xr.open_dataset(f)
         elif f.endswith('.nc'):
             this_sonde_data = xr.open_dataset(f)
