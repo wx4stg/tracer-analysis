@@ -76,7 +76,7 @@ def add_seabreeze_to_features(tfm):
 
 
 def add_radiosonde_data(tfm, n_sounding_levels=2000):
-    date_i_want = tfm.time.data[0].astype('datetime64[D]').astype(dt)
+    date_i_want = tfm.time.data[0].astype('datetime64[s]').astype(dt).replace(hour=0, minute=0, second=0, microsecond=0)
     time_start_this_day = np.min(tfm.time.data)
     time_end_this_day = np.max(tfm.time.data)
 
@@ -195,7 +195,8 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
         acars_profile_lats.append(airports_i_want[acars_loctime[:3]]['latitude'])
         acars_profile_lons.append(airports_i_want[acars_loctime[:3]]['longitude'])
         acars_profile_files.append('ACARS+'+acars_loctime)
-    acars_profile_sbf = identify_side(np.array(acars_profile_dts).astype('datetime64[s]'), np.array(acars_profile_lons), np.array(acars_profile_lats), tfm.time.compute().data.astype('datetime64[s]').astype(float),
+    acars_profile_dts = np.array(acars_profile_dts).astype('datetime64[s]')
+    acars_profile_sbf = identify_side(acars_profile_dts.astype(float), np.array(acars_profile_lons), np.array(acars_profile_lats), tfm.time.compute().data.astype('datetime64[s]').astype(float),
                                         tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.compute().data, tfm.lat.compute().data)
     all_sonde_files = np.concatenate([arm_sonde_files_this_day, tamu_sonde_files_this_day, CMAS_sonde_files_this_day, acars_profile_files])
     all_sonde_dts = np.concatenate([arm_sonde_dts_this_day, tamu_sonde_dts_this_day, CMAS_sonde_dts_this_day, acars_profile_dts])
@@ -218,8 +219,11 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
 
     for f, this_dt, sbf in zip(all_sonde_files, all_sonde_dts, all_sonde_sbf_side):
         if f.startswith('ACARS'):
-            acars_conn = spy.acars_data(str(this_dt.year).zfill(4), str(this_dt.month).zfill(2), str(this_dt.day).zfill(2), str(this_dt.hour).zfill(2))
-            sounding = acars_conn.get_profile(f.replace('ACARS+', ''), hush=True, clean_it=True)
+            this_pydt = this_dt.astype(dt)
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore')
+                acars_conn = spy.acars_data(str(this_pydt.year).zfill(4), str(this_pydt.month).zfill(2), str(this_pydt.day).zfill(2), str(this_pydt.hour).zfill(2))
+                sounding = acars_conn.get_profile(f.replace('ACARS+', ''), hush=True, clean_it=True)
             this_sonde_data = pd.DataFrame(
                 {'pres' : sounding['p'].to('hPa').m,
                 'tdry' : sounding['T'].to('degC').m,
@@ -425,21 +429,15 @@ def compute_sounding_stats(tfm):
             try:
                 mlcape, mlcin = mpcalc.mixed_layer_cape_cin(pressure_i, temp_i, dew_i)
                 mlecape = calc_ecape(height_i, pressure_i, temp_i, spc_hum, u_i, v_i, cape_type='mixed_layer')
-            except Exception as e:
-                print(e)
+            except Exception:
                 print(f'manually added EL to ecape calculation at time {tfm.time.data[i]}')
                 temp_botch = temp_i.copy()
                 temp_botch[-1] = 100 * units.degC
                 dew_botch = dew_i.copy()
                 dew_botch[-1] = -50 * units.degC
                 spc_hum_botch = mpcalc.specific_humidity_from_dewpoint(pressure_i, dew_botch)
-                try:
-                    mlecape = calc_ecape(height_i, pressure_i, temp_botch, spc_hum_botch, u_i, v_i, cape_type='mixed_layer')
-                    mlcape, mlcin = mpcalc.mixed_layer_cape_cin(pressure_i, temp_i, dew_i)
-                except ValueError:
-                    mlecape = np.nan * units('J/kg')
-                    mlcape = np.nan * units('J/kg')
-                    mlcin = np.nan * units('J/kg')
+                mlecape = calc_ecape(height_i, pressure_i, temp_botch, spc_hum_botch, u_i, v_i, cape_type='mixed_layer')
+                mlcape, mlcin = mpcalc.mixed_layer_cape_cin(pressure_i, temp_botch, dew_botch)
             if type(mlecape) == int and mlecape == 0:
                 mlecape = 0 * units('J/kg')
             mlcapes[i] = mlcape.magnitude
