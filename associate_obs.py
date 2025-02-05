@@ -250,11 +250,36 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
                 )
         if len(this_sonde_data.pres.values) < 2:
             continue
-        new_pres = np.linspace(np.max(this_sonde_data.pres.values), np.min(this_sonde_data.pres.values), n_sounding_levels)
+
+        otp_check = np.array([-999])
+        if sbf == -1:
+            otp_check = maritime_representative_profile[last_maritime_profile_time_index, :, 0].copy()
+        elif sbf == -2:
+            otp_check = continental_representative_profile[last_continental_profile_time_index, :, 0].copy()
+        otp_check[otp_check == -999] = np.nan
+        old_top_pressure = np.nanmin(otp_check)
+        new_top_pressure = np.min(this_sonde_data.pres.values)
+        if np.isnan(old_top_pressure):
+            n_levels_to_replace = n_sounding_levels
+        else:
+            if old_top_pressure < new_top_pressure:
+                n_levels_to_replace = otp_check[otp_check > new_top_pressure].shape[0]
+            else:
+                n_levels_to_replace = n_sounding_levels
+
+        new_pres = np.linspace(np.max(this_sonde_data.pres.values), new_top_pressure, n_levels_to_replace)
         new_t, new_dp, new_u, new_v, new_z = interpolate_1d(new_pres, this_sonde_data.pres.values, this_sonde_data.tdry.values,
                                 this_sonde_data.dp.values, this_sonde_data.u_wind.values, this_sonde_data.v_wind.values,
                                 this_sonde_data.alt.values)
-        this_rep_profile = np.vstack([new_pres, new_t, new_dp, new_u, new_v, new_z]).T
+        if n_levels_to_replace < n_sounding_levels:
+            if sbf == -1:
+                this_rep_profile = maritime_representative_profile[last_maritime_profile_time_index, :, :].copy()
+                this_rep_profile[0:n_levels_to_replace, :] = np.vstack([new_pres, new_t, new_dp, new_u, new_v, new_z]).T
+            else:
+                this_rep_profile = continental_representative_profile[last_continental_profile_time_index, :, :].copy()
+                this_rep_profile[0:n_levels_to_replace, :] = np.vstack([new_pres, new_t, new_dp, new_u, new_v, new_z]).T
+        else:
+            this_rep_profile = np.vstack([new_pres, new_t, new_dp, new_u, new_v, new_z]).T
 
         closest_time_index = np.argmin(np.abs(tfm.time.data - this_dt))
         if sbf == -1:
