@@ -423,6 +423,10 @@ def compute_sounding_stats(tfm):
     feature_mlcape = np.zeros((tfm.feature.shape[0]))
     feature_mlcin = np.zeros((tfm.feature.shape[0]))
     feature_mlecape = np.zeros((tfm.feature.shape[0]))
+    feature_lcl = np.zeros((tfm.feature.shape[0]))
+    feature_lfc = np.zeros((tfm.feature.shape[0]))
+    feature_el = np.zeros((tfm.feature.shape[0]))
+    feature_ccl = np.zeros((tfm.feature.shape[0]))
 
     for sidenum, side in enumerate(['continental', 'maritime']):
         sidenum -= 2
@@ -437,6 +441,11 @@ def compute_sounding_stats(tfm):
         mlcapes = np.zeros(tfm.time.shape[0])
         mlcins = np.zeros(tfm.time.shape[0])
         mlecapes = np.zeros(tfm.time.shape[0])
+        lcls = np.zeros(tfm.time.shape[0])
+        lfcs = np.zeros(tfm.time.shape[0])
+        els = np.zeros(tfm.time.shape[0])
+        ccls = np.zeros(tfm.time.shape[0])
+
         for i in range(tfm.time.shape[0]):
             temp_i = temp[i, :]
             dew_i = dew[i, :]
@@ -449,6 +458,9 @@ def compute_sounding_stats(tfm):
                 mlcapes[i] = np.nan
                 mlcins[i] = np.nan
                 mlecapes[i] = np.nan
+                lcls[i] = np.nan
+                lfcs[i] = np.nan
+                els[i] = np.nan
                 continue
             spc_hum = mpcalc.specific_humidity_from_dewpoint(pressure_i, dew_i)
             try:
@@ -463,11 +475,21 @@ def compute_sounding_stats(tfm):
                 spc_hum_botch = mpcalc.specific_humidity_from_dewpoint(pressure_i, dew_botch)
                 mlecape = calc_ecape(height_i, pressure_i, temp_botch, spc_hum_botch, u_i, v_i, cape_type='mixed_layer')
                 mlcape, mlcin = mpcalc.mixed_layer_cape_cin(pressure_i, temp_botch, dew_botch)
+            lcl, _ = mpcalc.lcl(pressure_i[0], temp_i[0], dew_i[0])
+            lfc, _ = mpcalc.lfc(pressure_i, temp_i, dew_i)
+            el, _ = mpcalc.el(pressure_i, temp_i, dew_i)
+            ccl, _, _ = mpcalc.ccl(pressure_i, temp_i, dew_i)
+
             if type(mlecape) == int and mlecape == 0:
                 mlecape = 0 * units('J/kg')
             mlcapes[i] = mlcape.magnitude
             mlcins[i] = mlcin.magnitude
             mlecapes[i] = mlecape.magnitude
+            lcls[i] = lcl.magnitude
+            lfcs[i] = lfc.magnitude
+            els[i] = el.magnitude
+            ccls[i] = ccl.magnitude
+
         features_matching = np.where(tfm.feature_seabreeze.data == sidenum)[0]
         for matching_feat_idx in features_matching:
             matching_time_idx = tfm.feature_time_index.data[matching_feat_idx]
@@ -482,6 +504,10 @@ def compute_sounding_stats(tfm):
             feature_mlcape[matching_feat_idx] = mlcapes[matching_time_idx]
             feature_mlcin[matching_feat_idx] = mlcins[matching_time_idx]
             feature_mlecape[matching_feat_idx] = mlecapes[matching_time_idx]
+            feature_lcl[matching_feat_idx] = lcls[matching_time_idx]
+            feature_lfc[matching_feat_idx] = lfcs[matching_time_idx]
+            feature_el[matching_feat_idx] = els[matching_time_idx]
+            feature_ccl[matching_feat_idx] = ccls[matching_time_idx]
 
     tfm_stats = tfm.copy()
     tfm_stats = tfm_stats.assign({
@@ -494,7 +520,11 @@ def compute_sounding_stats(tfm):
         'feature_ccn_profile' : (('feature', 'vertical_levels'), feature_ccn_profile),
         'feature_mlcape' : (('feature',), feature_mlcape),
         'feature_mlcin' : (('feature',), feature_mlcin),
-        'feature_mlecape' : (('feature',), feature_mlecape)
+        'feature_mlecape' : (('feature',), feature_mlecape),
+        'feature_lcl' : (('feature',), feature_lcl),
+        'feature_lfc' : (('feature',), feature_lfc),
+        'feature_el' : (('feature',), feature_el),
+        'feature_ccl' : (('feature',), feature_ccl)
     })
     return tfm_stats
 
@@ -691,12 +721,16 @@ def convert_to_track_time(tfmo):
     track_mlcape = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
     track_mlcin = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
     track_mlecape = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
+    track_lcl = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
+    track_lfc = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
+    track_el = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
+    track_ccl = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
 
     tfmo['feature_parent_track_id'] = tfmo.feature_parent_track_id.compute().astype('int32')
     vars_to_load_now = ['feature_time_index', 'feature_seabreeze', 'feature_area', 'feature_echotop', 'feature_flash_count', 'feature_flash_count_area_GT_4km',
                         'feature_flash_count_area_LE_4km', 'feature_kdpvol', 'feature_lat', 'feature_lon', 'feature_rhvdeficitvol', 'feature_zdrvol', 'feature_min_L2_MCMIPC',
                         'feature_pressure_profile', 'feature_msl_profile', 'feature_temp_profile', 'feature_dew_profile', 'feature_u_profile', 'feature_v_profile', 'feature_ccn_profile',
-                        'feature_mlcape', 'feature_mlcin', 'feature_mlecape']
+                        'feature_mlcape', 'feature_mlcin', 'feature_mlecape', 'feature_lcl', 'feature_lfc', 'feature_el', 'feature_ccl']
     for var in vars_to_load_now:
         tfmo[var] = tfmo[var].compute()
     features_with_parents = np.sort(np.where(tfmo.feature_parent_cell_id.compute().data != -1)[0])
@@ -900,6 +934,39 @@ def convert_to_track_time(tfmo):
         elif previously_set_mlecape != this_feature_mlecape:
             track_mlecape[parent_track, time_idx] = np.nanmean([previously_set_mlecape, this_feature_mlecape])
 
+        # Handle lcl (min if already set)
+        this_feature_lcl = tfmo.feature_lcl.data[feature_idx]
+        previously_set_lcl = track_lcl[parent_track, time_idx]
+        if np.isnan(previously_set_lcl):
+            track_lcl[parent_track, time_idx] = this_feature_lcl
+        elif previously_set_lcl != this_feature_lcl:
+            track_lcl[parent_track, time_idx] = np.nanmin([previously_set_lcl, this_feature_lcl])
+        
+        # Handle lfc (min if already set)
+        this_feature_lfc = tfmo.feature_lfc.data[feature_idx]
+        previously_set_lfc = track_lfc[parent_track, time_idx]
+        if np.isnan(previously_set_lfc):
+            track_lfc[parent_track, time_idx] = this_feature_lfc
+        elif previously_set_lfc != this_feature_lfc:
+            track_lfc[parent_track, time_idx] = np.nanmin([previously_set_lfc, this_feature_lfc])
+        
+        # Handle el (max if already set)
+        this_feature_el = tfmo.feature_el.data[feature_idx]
+        previously_set_el = track_el[parent_track, time_idx]
+        if np.isnan(previously_set_el):
+            track_el[parent_track, time_idx] = this_feature_el
+        elif previously_set_el != this_feature_el:
+            track_el[parent_track, time_idx] = np.nanmax([previously_set_el, this_feature_el])
+        
+        # Handle ccl (min if already set)
+        this_feature_ccl = tfmo.feature_ccl.data[feature_idx]
+        previously_set_ccl = track_ccl[parent_track, time_idx]
+        if np.isnan(previously_set_ccl):
+            track_ccl[parent_track, time_idx] = this_feature_ccl
+        elif previously_set_ccl != this_feature_ccl:
+            track_ccl[parent_track, time_idx] = np.nanmin([previously_set_ccl, this_feature_ccl])
+
+
     tfmo = tfmo.assign({
         'track_seabreeze' : (('track', 'time'), track_seabreezes),
         'track_area' : (('track', 'time'), track_area),
@@ -922,7 +989,11 @@ def convert_to_track_time(tfmo):
         'track_ccn_profile' : (('track', 'time', 'vertical_levels'), track_ccn_profile),
         'track_mlcape' : (('track', 'time'), track_mlcape),
         'track_mlcin' : (('track', 'time'), track_mlcin),
-        'track_mlecape' : (('track', 'time'), track_mlecape)
+        'track_mlecape' : (('track', 'time'), track_mlecape),
+        'track_lcl' : (('track', 'time'), track_lcl),
+        'track_lfc' : (('track', 'time'), track_lfc),
+        'track_el' : (('track', 'time'), track_el),
+        'track_ccl' : (('track', 'time'), track_ccl)
     })
     return tfmo
 
@@ -948,8 +1019,10 @@ if __name__ == '__main__':
     tfm_w_profiles = add_radiosonde_data(tfm_seabreeze)
     tfm_w_sfc = add_madis_data(tfm_w_profiles)
     tfm_w_aerosols = add_sfc_aerosol_data(tfm_w_sfc)
+    # Compute aircraft aerosol passes here
     tfm_sounding_stats = compute_sounding_stats(tfm_w_aerosols)
     tfm_w_parents = generate_seg_mask_cell_track(generate_seg_mask_cell_track(tfm_sounding_stats, convert_to='track'), convert_to='cell')
+    # Compute aircraft below cloud passes here
     print('Converting to track time')
     tfm_obs = convert_to_track_time(tfm_w_parents)
     tfm_obs.to_zarr(tfm_path.replace('.zarr', '-obs.zarr'), zarr_format=2)
