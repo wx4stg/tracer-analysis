@@ -5,21 +5,31 @@ import xarray as xr
 import pandas as pd
 from datetime import datetime as dt
 from os import path, listdir
+from pathlib import Path as pth
 from glob import glob
 import numpy as np
 from metpy.interpolate import interpolate_1d
 from metpy.units import units
 from metpy import calc as mpcalc
+from metpy.plots import USCOUNTIES
 from ecape.calc import calc_ecape
 import sounderpy as spy
 from scipy.interpolate import interp1d
 import sys
 import warnings
 import geopandas as gpd
+from matplotlib import pyplot as plt
+from matplotlib import use as mpluse
+from cartopy import crs as ccrs
+from cartopy import feature as cfeat
+import cmweather
 from matplotlib.path import Path
 from numba import njit
 
-from glmtools.io.lightning_ellipse import lightning_ellipse_rev
+import pyart
+from cmweather.cm_colorblind import ChaseSpectral, plasmidis, turbone
+from cmocean.cm import phase
+
 from pyxlma import coords
 
 from track_features_merges_augmented import add_eet_to_radar_data, add_eet_to_tobac_data, add_goes_data_to_tobac_path
@@ -613,11 +623,10 @@ def add_sfc_aerosol_data(tfm, ss_lower_bound=0.6, ss_upper_bound=0.8, ss_target=
     return tfm_w_aerosols
 
 
-def apply_coord_transforms(tfm):
+def apply_coord_transforms(tfm, should_debug=False):
     tfm = tfm.copy()
-    radar_lat, radar_lon = 29.47, -95.08
+    radar_lat, radar_lon = 29.47190094, -95.07873535
     tpcs = coords.TangentPlaneCartesianSystem(ctrLat=radar_lat, ctrLon=radar_lon, ctrAlt=0)
-    ltg_ell = lightning_ellipse_rev[1]
     
     x2d, y2d = np.meshgrid(tfm.x.data, tfm.y.data)
     grid_ecef_coords = tpcs.toECEF(x2d.flatten(), y2d.flatten(), np.zeros_like(x2d).flatten())
@@ -644,11 +653,130 @@ def apply_coord_transforms(tfm):
     feature_ecef_coords = tpcs.toECEF(feat_x, feat_y, feat_z)
     feature_lon, feature_lat, _ = geosys.fromECEF(*feature_ecef_coords)
     tfm = tfm.assign({'feature_lat' : (('feature'), feature_lat), 'feature_lon' : (('feature'), feature_lon)})
+    if should_debug:
+        date_i_want = tfm.time.data[0].astype('datetime64[D]').astype(dt)
+        # Coords testing plots
+        ax_extent = [tfm.lon.min()-0.25, tfm.lon.max()+0.25, tfm.lat.min()-0.25, tfm.lat.max()+0.25]
+        x2d, y2d = np.meshgrid(tfm.x.data, tfm.y.data)
+        fig, axs = plt.subplots(2, 3, subplot_kw={'projection': ccrs.PlateCarree()})
+        cartx = axs[0, 0].pcolormesh(tfm.lon, tfm.lat, x2d, transform=ccrs.PlateCarree(), cmap='managua')
+        axs[0, 0].set_title('Cartesian - x')
+        fig.colorbar(cartx, ax=axs[0, 0], orientation='horizontal', label='x')
+        carty = axs[1, 0].pcolormesh(tfm.lon, tfm.lat, y2d, transform=ccrs.PlateCarree(), cmap='managua')
+        axs[1, 0].set_title('Cartesian - y')
+        fig.colorbar(carty, ax=axs[1, 0], orientation='horizontal', label='y')
+
+
+        geolon = axs[0, 1].pcolormesh(tfm.lon, tfm.lat, tfm.lon, transform=ccrs.PlateCarree(), cmap='managua')
+        axs[0, 1].set_title('Longitude')
+        fig.colorbar(geolon, ax=axs[0, 1], orientation='horizontal', label='Longitude')
+        geolat = axs[1, 1].pcolormesh(tfm.lon, tfm.lat, tfm.lat, transform=ccrs.PlateCarree(), cmap='managua')
+        axs[1, 1].set_title('Latitude')
+        fig.colorbar(geolat, ax=axs[1, 1], orientation='horizontal', label='Latitude')
+
+        goesx = axs[0, 2].pcolormesh(tfm.lon, tfm.lat, tfm.g16_scan_x, transform=ccrs.PlateCarree(), cmap='managua')
+        axs[0, 2].set_title('GOES x')
+        fig.colorbar(goesx, ax=axs[0, 2], orientation='horizontal', label='GOES x')
+        goesy = axs[1, 2].pcolormesh(tfm.lon, tfm.lat, tfm.g16_scan_y, transform=ccrs.PlateCarree(), cmap='managua')
+        axs[1, 2].set_title('GOES y')
+        fig.colorbar(goesy, ax=axs[1, 2], orientation='horizontal', label='GOES y')
+
+
+        for i in range(2):
+            for j in range(3):
+                ax = axs[i, j]
+                ax.add_feature(cfeat.COASTLINE.with_scale('50m'))
+                ax.add_feature(cfeat.BORDERS.with_scale('50m'))
+                ax.add_feature(USCOUNTIES.with_scale('20m'), edgecolor='gray')
+                ax.set_extent(ax_extent)
+                ax.scatter(tfm.center_lon, tfm.center_lat, transform=ccrs.PlateCarree(), color='lime', s=1)
+
+        px = 1/plt.rcParams['figure.dpi']  # pixel in inches
+        fig.set_size_inches(900*px, 600*px)
+        fig.tight_layout()
+        fig.savefig(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/coords/test.png')
     return tfm
 
 
-def add_timeseries_data_to_toabc_path(tobac_data, date_i_want):
-    tobac_data = tobac_data.copy()
+def add_timeseries_data_to_toabc_path(tobac_data, date_i_want, client=None, should_debug=False):
+    def make_debug_plot_for_featid(feat_time_index, radar_time):
+        mpluse('agg')
+        px = 1/plt.rcParams['figure.dpi']
+        radar_filepath = f'/Volumes/LtgSSd/nexrad_l2/{radar_time.strftime('%Y%m%d')}/KHGX{radar_time.strftime("%Y%m%d_%H%M%S")}_V06'
+        if not path.exists(radar_filepath):
+            return 0
+        rdr = pyart.io.read(radar_filepath)
+        tfm_time = tfm.isel(time=feat_time_index)
+        tfm_time = tfm_time.isel(feature=(tfm_time.feature_time_index == feat_time_index))
+        axis_limits = [tfm_time.lon.min(), tfm_time.lon.max(), tfm_time.lat.min(), tfm_time.lat.max()]
+        for feat_id in tfm_time.feature.data:
+            tfm_feat_time = tfm_time.sel(feature=feat_id)
+            if np.isnan(tfm_feat_time.feature_zdrcol.data.item()):
+                continue
+            for tfmvar in ['z', 'zdr', 'rhvdeficit', 'kdp']:
+                if tfmvar == 'z':
+                    radarvar = 'reflectivity'
+                    cmap = ChaseSpectral
+                    vmin = -10
+                    vmax = 80
+                    text_str = f'Area: {tfm_feat_time.feature_area.data.item():.1f}\n' \
+                            f'Grid Cells: {tfm_feat_time.feature_grid_cell_count.data}\n' \
+                            f'Threshold Max: {tfm_feat_time.feature_threshold_max.data}\n' \
+                            f'Max Z: {tfm_feat_time.feature_maxrefl.data}'
+                else:
+                    if tfmvar == 'zdr':
+                        radarvar = 'differential_reflectivity'
+                        cmap = turbone
+                        vmin = -2
+                        vmax = 8
+                    elif tfmvar == 'rhvdeficit':
+                        radarvar = 'cross_correlation_ratio'
+                        cmap = plasmidis
+                        vmin = 0
+                        vmax = 1
+                    elif tfmvar == 'kdp':
+                        radarvar = 'differential_phase'
+                        cmap = phase
+                        vmin = 0
+                        vmax = 360
+                    text_str = f'{tfmvar}vol: {tfm_feat_time[f"feature_{tfmvar}vol"].data}\n' \
+                            f'{tfmvar}col: {tfm_feat_time[f"feature_{tfmvar}col"].data}\n' \
+                            f'{tfmvar}col_mean: {tfm_feat_time[f"feature_{tfmvar}col_mean"].data:.1f}\n' \
+                            f'{tfmvar}col_total: {tfm_feat_time[f"feature_{tfmvar}col_total"].data}\n' \
+                            f'{tfmvar}zdrwt_total: {tfm_feat_time.feature_zdrwt_total.data}\n'
+                fig, axs = plt.subplots(1, 3, subplot_kw={'projection': ccrs.PlateCarree()})
+                fig.set_size_inches(1800*px, 1200*px)
+                rmd = pyart.graph.RadarMapDisplay(rdr)
+                seg_handle = axs[1].pcolormesh(tfm_feat_time.lon, tfm_feat_time.lat, tfm_feat_time.segmentation_mask, transform=ccrs.PlateCarree(), cmap='viridis', zorder=2)
+                fig.colorbar(seg_handle, ax=axs[1], orientation='horizontal', label='Segmentation Mask')
+                rmd.plot_ppi_map(radarvar, sweep=0, vmin=vmin, vmax=vmax, cmap=cmap, colorbar_label=radarvar, embellish=False, lat_lines=[], lon_lines=[], ax=axs[0], fig=fig, colorbar_orient='horizontal', zorder=2)
+
+                axs[1].scatter(tfm_feat_time.feature_lon, tfm_feat_time.feature_lat, transform=ccrs.PlateCarree(), color='red', s=1, zorder=3)
+                axs[1].set_title('Segmentation Mask')
+
+                segmask_trans = tfm_feat_time.segmentation_mask#.transpose(*tfm_feat_time.lon.dims) # TODO: FIX FROM ISSUE #7
+                feat_grid_lons = tfm_feat_time.lon.data.flatten()[segmask_trans.data.flatten() == feat_id]
+                feat_grid_lats = tfm_feat_time.lat.data.flatten()[segmask_trans.data.flatten() == feat_id]
+
+                rmd.plot_ppi_map(radarvar, sweep=0, vmin=vmin, vmax=vmax, cmap=cmap, colorbar_label=radarvar, embellish=False, lat_lines=[], lon_lines=[], ax=axs[2], fig=fig, colorbar_flag=False, zorder=2)
+                axs[2].scatter(feat_grid_lons, feat_grid_lats, transform=ccrs.PlateCarree(), color='gold', marker='*', edgecolors='black', s=3, zorder=3)
+                if len(feat_grid_lons) > 0:
+                    axs[2].set_extent([feat_grid_lons.min()-0.1, feat_grid_lons.max()+0.1, feat_grid_lats.min()-0.1, feat_grid_lats.max()+0.1], crs=ccrs.PlateCarree())
+                else:
+                    axs[2].set_extent([tfm_feat_time.feature_lon.data-0.1, tfm_feat_time.feature_lon.data+0.1, tfm_feat_time.feature_lat.data-0.1, tfm_feat_time.feature_lat.data+0.1], crs=ccrs.PlateCarree())
+                axs[2].set_title(f'Feature {feat_id}')
+                axs[2].text(0.02, 0.02, text_str, transform=axs[2].transAxes)
+                for i, ax in enumerate(axs):
+                    ax.add_feature(cfeat.STATES.with_scale('50m'), zorder=4, alpha=0.5)
+                    ax.add_feature(USCOUNTIES.with_scale('5m'), zorder=4, alpha=0.2)
+                    if i != 2:
+                        ax.set_extent(axis_limits, crs=ccrs.PlateCarree())
+
+                fig.tight_layout()
+                fig.savefig(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/tobac_ts/{tfmvar}_{feat_id}.png')
+                plt.close(fig)
+        return 1
+    tfm = tobac_data.copy()
     tobac_save_path = f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime('%Y%m%d')}/'
     for f in listdir(tobac_save_path):
         if f.startswith('timeseries_data_melt') and f.endswith('.nc'):
@@ -657,11 +785,22 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want):
     else:
         raise ValueError('>>>>>>>Unable to find timeseries data...>>>>>>>')
     timeseries_data = xr.open_dataset(tobac_timeseries_path, chunks='auto')
-    timeseries_data = timeseries_data.reindex(feature=tobac_data.feature.data, fill_value=np.nan)
+    timeseries_data = timeseries_data.reindex(feature=tfm.feature.data, fill_value=np.nan)
     for dv in timeseries_data.data_vars:
-        if dv not in tobac_data.data_vars:
-            tobac_data[dv] = timeseries_data[dv].copy()
-    return tobac_data
+        if dv not in tfm.data_vars:
+            tfm[dv] = timeseries_data[dv].copy()
+
+    if should_debug:
+        if client is not None:
+            res = []
+            for i, t in enumerate(tfm.time.data.astype('datetime64[s]').astype('O')):
+                res.append(client.submit(make_debug_plot_for_featid, i, t))
+            for promised_res in res:
+                this_res = promised_res.result()
+        else:
+            for this_itr in enumerate(tfm.time.data.astype('datetime64[s]').astype('O')):
+                make_debug_plot_for_featid(*this_itr)
+    return tfm
 
 
 @njit(parallel=True)
@@ -1005,16 +1144,26 @@ if __name__ == '__main__':
         client = None
     date_i_want = sys.argv[1]
     date_i_want = dt.strptime(date_i_want, '%Y-%m-%d')
+    should_debug = sys.argv[2] == '--debug'
+    if should_debug:
+        pth(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/coords').mkdir(parents=True, exist_ok=True)
+        pth(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/tobac_ts').mkdir(parents=True, exist_ok=True)
+        pth(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/eet').mkdir(parents=True, exist_ok=True)
+        pth(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/ctt').mkdir(parents=True, exist_ok=True)
+        pth(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/seabreeze').mkdir(parents=True, exist_ok=True)
+        pth(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/profiles').mkdir(parents=True, exist_ok=True)
+        pth(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/sfc').mkdir(parents=True, exist_ok=True)
+        pth(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/aerosols').mkdir(parents=True, exist_ok=True)
     tfm_path = f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime("%Y%m%d")}/seabreeze.zarr'
     tfm = xr.open_dataset(tfm_path, engine='zarr')
-    tfm_coord = apply_coord_transforms(tfm)
-    tfm_ts = add_timeseries_data_to_toabc_path(tfm_coord, date_i_want)
+    tfm_coord = apply_coord_transforms(tfm, should_debug=should_debug)
     if not path.exists(f'/Volumes/LtgSSD/nexrad_zarr/{date_i_want.strftime('%B').upper()}/{date_i_want.strftime('%Y%m%d')}'):
         print('I don\'t have EET for this day, computing it')
         add_eet_to_radar_data(date_i_want, client)
-    tfm_eet = add_eet_to_tobac_data(tfm_ts, date_i_want, client)
+    tfm_eet = add_eet_to_tobac_data(tfm_coord, date_i_want, client)
+    tfm_ts = add_timeseries_data_to_toabc_path(tfm_eet, date_i_want, client=client, should_debug=should_debug)
     print('Adding satellite data to tobac data')
-    tfm_ctt = add_goes_data_to_tobac_path(tfm_eet, client)
+    tfm_ctt = add_goes_data_to_tobac_path(tfm_ts, client)
     tfm_seabreeze = add_seabreeze_to_features(tfm_ctt)
     tfm_w_profiles = add_radiosonde_data(tfm_seabreeze)
     tfm_w_sfc = add_madis_data(tfm_w_profiles)
