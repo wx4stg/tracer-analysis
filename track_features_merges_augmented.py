@@ -16,6 +16,12 @@ from glmtools.io.lightning_ellipse import lightning_ellipse_rev
 from pyxlma import coords
 from scipy.interpolate import griddata
 
+from matplotlib import pyplot as plt
+from cartopy import crs as ccrs
+from cartopy import feature as cfeat
+from metpy.plots import USCOUNTIES
+from matplotlib import use as mpluse
+
 def fixup_transformed_coords(transformed_coords, input_shape):
     for transformed in transformed_coords:
         if not isinstance(transformed, np.ndarray):
@@ -88,20 +94,64 @@ def add_eet_to_radar_data(tobac_day, client=None):
         client.gather(all_res)
 
 
-def add_eet_to_tobac_data(tfm, date_i_want, client=None):
-    def find_eet_feature(tfm, radar_path, time_idx):
+def add_eet_to_tobac_data(tfm, date_i_want, client=None, should_debug=False):
+    def find_eet_feature(tfm, radar_path, time_idx, should_debug):
         feature_indicies_at_time = np.nonzero(tfm.feature_time_index.compute().data == time_idx)[0]
         if len(feature_indicies_at_time) == 0:
             return 0, 0, 0
-        radar = xr.open_dataset(radar_path, engine='zarr')
+        radar = xr.open_dataset(radar_path, engine='zarr').isel(time=0, nradar=0)
+        this_eet = radar.eet_sam.data
+        vmax = np.nanmax(this_eet)
+        vmin = np.nanmin(this_eet)
         features_at_time = tfm.isel(feature=feature_indicies_at_time, time=time_idx)
         feature_eet = np.full(features_at_time.feature.data.shape, np.nan)
+        if should_debug:
+            mpluse('Agg')
+            axis_limits = [tfm.lon.min(), tfm.lon.max(), tfm.lat.min(), tfm.lat.max()]
+            px = 1/plt.rcParams['figure.dpi']
+            fig, axs = plt.subplots(1, 3, subplot_kw={'projection': ccrs.PlateCarree()})
+            fig.set_size_inches(1800*px, 1200*px)
+            wide_eet_handle = axs[0].pcolormesh(features_at_time.lon, features_at_time.lat, this_eet, transform=ccrs.PlateCarree(), vmin=vmin, vmax=vmax)
+            wide_seg_handle = axs[1].pcolormesh(features_at_time.lon, features_at_time.lat, features_at_time.segmentation_mask, transform=ccrs.PlateCarree())
+            zoom_eet_bkgd = axs[2].pcolormesh(features_at_time.lon, features_at_time.lat, this_eet, alpha=0.5, transform=ccrs.PlateCarree(), vmin=vmin, vmax=vmax)
+            fig.colorbar(wide_eet_handle, ax=axs[0], orientation='horizontal', label='Echo Top Height')
+            fig.colorbar(wide_seg_handle, ax=axs[1], orientation='horizontal', label='Segmentation Mask')
+            axs[0].set_title('Echo Tops at time: ' + str(tfm.time.data[time_idx]))
+            axs[1].set_title('Segmentation Mask')
         for j, feat_to_find in enumerate(features_at_time.feature.data):
             this_seg_mask = features_at_time.segmentation_mask.data
-            this_eet = radar.eet_sam.isel(time=0).data
             if not np.any(this_seg_mask == feat_to_find):
                 continue
             feature_eet[j] = np.nanmax(this_eet[this_seg_mask == feat_to_find])
+            if should_debug:
+                if np.isnan(feature_eet[j]):
+                    continue
+                feature_ctr_scatter = axs[1].scatter(features_at_time.feature_lon.data[j], features_at_time.feature_lat.data[j], color='red', s=1, transform=ccrs.PlateCarree())
+                
+                feat_grid_lons = features_at_time.lon.data.flatten()[this_seg_mask.flatten() == feat_to_find]
+                feat_grid_lats = features_at_time.lat.data.flatten()[this_seg_mask.flatten() == feat_to_find]
+                feat_grid_eet = this_eet[this_seg_mask == feat_to_find]
+                feature_grid_scatter = axs[2].scatter(feat_grid_lons, feat_grid_lats, c=feat_grid_eet, edgecolors='black', s=10, vmin=vmin, vmax=vmax, transform=ccrs.PlateCarree())
+                feature_target_scatter = axs[2].scatter(
+                    feat_grid_lons[np.nanargmax(feat_grid_eet)],
+                    feat_grid_lats[np.nanargmax(feat_grid_eet)],
+                    c='#00000000', edgecolors='red', s=50, transform=ccrs.PlateCarree()
+                )
+                axs[2].set_extent([feat_grid_lons.min()-0.1, feat_grid_lons.max()+0.1, feat_grid_lats.min()-0.1, feat_grid_lats.max()+0.1], crs=ccrs.PlateCarree())
+                axs[2].set_title(f'Feature {feat_to_find} Echo Top: {feature_eet[j]}')
+                for i, ax in enumerate(axs):
+                    ax.add_feature(cfeat.STATES.with_scale('50m'), zorder=4, alpha=0.5)
+                    ax.add_feature(USCOUNTIES.with_scale('5m'), zorder=4, alpha=0.2)
+                    if i != 2:
+                        ax.set_extent(axis_limits, crs=ccrs.PlateCarree())
+                fig.tight_layout()
+                fig.savefig(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/eet/{feat_to_find}.png')
+                feature_ctr_scatter.remove()
+                feature_grid_scatter.remove()
+                feature_target_scatter.remove()
+            break
+        if should_debug:
+            plt.close(fig)
         start_idx = feature_indicies_at_time[0]
         end_idx = feature_indicies_at_time[-1] + 1
         radar.close()
@@ -116,7 +166,7 @@ def add_eet_to_tobac_data(tfm, date_i_want, client=None):
         if radar_dt != expected_dt:
             raise ValueError(f'Error at index {i}! Expected {expected_dt}, got {radar_dt}')
         rp = radar_top_path + rf
-        return find_eet_feature(tfm, rp, i)
+        return find_eet_feature(tfm, rp, i, should_debug)
 
 
     radar_top_path = f'/Volumes/LtgSSD/nexrad_zarr/{date_i_want.strftime('%B').upper()}/{date_i_want.strftime('%Y%m%d')}/'

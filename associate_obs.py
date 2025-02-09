@@ -714,6 +714,9 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want, client=None, shou
             if np.isnan(tfm_feat_time.feature_zdrcol.data.item()):
                 continue
             for tfmvar in ['z', 'zdr', 'rhvdeficit', 'kdp']:
+                path_to_save = f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/tobac_ts/{tfmvar}_{feat_id}.png'
+                if path.exists(path_to_save):
+                    continue
                 if tfmvar == 'z':
                     radarvar = 'reflectivity'
                     cmap = ChaseSpectral
@@ -773,7 +776,7 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want, client=None, shou
                         ax.set_extent(axis_limits, crs=ccrs.PlateCarree())
 
                 fig.tight_layout()
-                fig.savefig(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/tobac_ts/{tfmvar}_{feat_id}.png')
+                fig.savefig(path_to_save)
                 plt.close(fig)
         return 1
     tfm = tobac_data.copy()
@@ -1160,7 +1163,7 @@ if __name__ == '__main__':
     if not path.exists(f'/Volumes/LtgSSD/nexrad_zarr/{date_i_want.strftime('%B').upper()}/{date_i_want.strftime('%Y%m%d')}'):
         print('I don\'t have EET for this day, computing it')
         add_eet_to_radar_data(date_i_want, client)
-    tfm_eet = add_eet_to_tobac_data(tfm_coord, date_i_want, client)
+    tfm_eet = add_eet_to_tobac_data(tfm_coord, date_i_want, client, should_debug)
     tfm_ts = add_timeseries_data_to_toabc_path(tfm_eet, date_i_want, client=client, should_debug=should_debug)
     print('Adding satellite data to tobac data')
     tfm_ctt = add_goes_data_to_tobac_path(tfm_ts, client)
