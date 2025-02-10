@@ -11,7 +11,7 @@ import numpy as np
 from metpy.interpolate import interpolate_1d
 from metpy.units import units
 from metpy import calc as mpcalc
-from metpy.plots import USCOUNTIES
+from metpy.plots import USCOUNTIES, SkewT
 from ecape.calc import calc_ecape
 import sounderpy as spy
 from scipy.interpolate import interp1d
@@ -108,7 +108,7 @@ def add_seabreeze_to_features(tfm, client=None, should_debug=False):
     return tfm
 
 
-def add_radiosonde_data(tfm, n_sounding_levels=2000):
+def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
     date_i_want = tfm.time.data[0].astype('datetime64[s]').astype(dt).replace(hour=0, minute=0, second=0, microsecond=0)
     time_start_this_day = np.min(tfm.time.data)
     time_end_this_day = np.max(tfm.time.data)
@@ -141,6 +141,8 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
         arm_sonde_files_this_day = np.empty(0, dtype=str)
         arm_sonde_dts_this_day = np.empty(0, dtype='datetime64[s]')
         arm_sonde_sbf_side = np.empty(0, dtype=int)
+        arm_sonde_lons = np.empty(0, dtype=float)
+        arm_sonde_lats = np.empty(0, dtype=float)
 
     # Load the TAMU sondes
     tamu_sonde_path = '/Volumes/LtgSSD/TAMU_SONDES/'
@@ -172,6 +174,8 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
         tamu_sonde_files_this_day = np.empty(0, dtype=str)
         tamu_sonde_dts_this_day = np.empty(0, dtype='datetime64[s]')
         tamu_sonde_sbf_side = np.empty(0, dtype=int)
+        tamu_sonde_lons = np.empty(0, dtype=float)
+        tamu_sonde_lats = np.empty(0, dtype=float)
 
     # Load the CMAS sondes
     CMAS_sonde_path = '/Volumes/LtgSSD/CMAS-sondes/'
@@ -201,6 +205,8 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
         CMAS_sonde_files_this_day = np.empty(0, dtype=str)
         CMAS_sonde_dts_this_day = np.empty(0, dtype='datetime64[s]')
         CMAS_sonde_sbf_side = np.empty(0, dtype=int)
+        CMAS_sonde_lons = np.empty(0, dtype=float)
+        CMAS_sonde_lats = np.empty(0, dtype=float)
 
     # Load ACARS profiles
     acars_all_list = []
@@ -234,6 +240,8 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
     all_sonde_files = np.concatenate([arm_sonde_files_this_day, tamu_sonde_files_this_day, CMAS_sonde_files_this_day, acars_profile_files])
     all_sonde_dts = np.concatenate([arm_sonde_dts_this_day, tamu_sonde_dts_this_day, CMAS_sonde_dts_this_day, acars_profile_dts])
     all_sonde_sbf_side = np.concatenate([arm_sonde_sbf_side, tamu_sonde_sbf_side, CMAS_sonde_sbf_side, acars_profile_sbf])
+    all_sonde_lons = np.concatenate([arm_sonde_lons, tamu_sonde_lons, CMAS_sonde_lons, acars_profile_lons])
+    all_sonde_lats = np.concatenate([arm_sonde_lats, tamu_sonde_lats, CMAS_sonde_lats, acars_profile_lats])
 
     maritime_sonde_dts = all_sonde_dts[all_sonde_sbf_side == -1]
     maritime_sorting = np.argsort(maritime_sonde_dts)
@@ -250,9 +258,9 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
     continental_representative_profile = np.full((tfm.time.shape[0], n_sounding_levels, n_sounding_vars), -999, dtype=float)
     last_continental_profile_time_index = -1
 
-    for f, this_dt, sbf in zip(all_sonde_files, all_sonde_dts, all_sonde_sbf_side):
+    for f, this_dt, sbf, this_lon, this_lat in zip(all_sonde_files, all_sonde_dts, all_sonde_sbf_side, all_sonde_lons, all_sonde_lats):
+        this_pydt = this_dt.astype(dt)
         if f.startswith('ACARS'):
-            this_pydt = this_dt.astype(dt)
             with warnings.catch_warnings():
                 warnings.filterwarnings('ignore')
                 acars_conn = spy.acars_data(str(this_pydt.year).zfill(4), str(this_pydt.month).zfill(2), str(this_pydt.day).zfill(2), str(this_pydt.hour).zfill(2))
@@ -283,6 +291,38 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
                 )
         if len(this_sonde_data.pres.values) < 2:
             continue
+
+        if should_debug:
+            save_path = f'./debug-figs-{this_pydt.strftime("%Y%m%d")}/profiles/{this_pydt.strftime("%Y%m%d_%H%M")}.png'
+            if not path.exists(save_path):
+                p = this_sonde_data.pres.values * units.hPa
+                T = this_sonde_data.tdry.values * units.degC
+                Td = this_sonde_data.dp.values * units.degC
+                u = this_sonde_data.u_wind.values * units.m / units.s
+                v = this_sonde_data.v_wind.values * units.m / units.s
+                mask = mpcalc.resample_nn_1d(p.m,  np.logspace(4, 2))
+                fig = plt.figure()
+                skew = SkewT(fig, subplot=(1, 2, 1))
+                ax = fig.add_subplot(1, 2, 2, projection=ccrs.PlateCarree())
+                skew.plot(p, T, 'r')
+                skew.plot(p, Td, 'lime')
+                skew.ax.scatter([T[0]], [p[0]], color='r', s=10, edgecolors='k', zorder=5)
+                skew.ax.scatter([Td[0]], [p[0]], color='lime', s=10, edgecolors='k', zorder=5)
+                skew.plot_barbs(p[mask], u[mask], v[mask])
+
+                skew.ax.set_title(f'{this_pydt.strftime("%Y-%m-%d %H:%M")}')
+
+                if sbf == -1:
+                    ax.scatter(this_lon, this_lat, c='blue', s=50, marker='*', edgecolors='k', zorder=5)
+                elif sbf == -2:
+                    ax.scatter(this_lon, this_lat, c='red', s=50, marker='*', edgecolors='k', zorder=5)
+                nearest_sbf_time_idx = np.argmin(np.abs(tfm.time.data.astype('datetime64[s]') - this_dt.astype('datetime64[s]')))
+                this_sbf = tfm.seabreeze.isel(time=nearest_sbf_time_idx)
+                ax.pcolormesh(tfm.lon, tfm.lat, this_sbf.transpose(*tfm.lon.dims), transform=ccrs.PlateCarree(), zorder=1, alpha=0.25, cmap='RdBu')
+                ax.add_feature(cfeat.STATES.with_scale('50m'))
+                ax.add_feature(USCOUNTIES.with_scale('5m'))
+                fig.savefig(save_path)
+
 
         otp_check = np.array([-999])
         if sbf == -1:
@@ -362,6 +402,37 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000):
         tfm_w_profiles[var].attrs['units'] = 'hPa' if 'pressure' in var else 'C' if 'temperature' in var else 'm/s' if 'u' in var or 'v' in var else 'm'
 
     tfm_w_profiles.attrs['soundings_used'] = [path.basename(f) for f in all_sonde_files]
+
+    if should_debug:
+        for side in ['continental', 'maritime']:
+            save_path = f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/profiles/{side}_representative.png'
+            if not path.exists(save_path):
+                px = 1/plt.rcParams['figure.dpi']
+                fig, axs = plt.subplots(6, 1)
+                fig.set_size_inches(1800*px, 1800*px)
+                hpa_handle = axs[0].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
+                                               tfm_w_profiles[f'{side}_pressure_profile'].T, cmap='viridis')
+                temp_handle = axs[1].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
+                                                tfm_w_profiles[f'{side}_temperature_profile'].T, cmap='turbo')
+                dew_handle = axs[2].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
+                                               tfm_w_profiles[f'{side}_dewpoint_profile'].T, cmap='BrBG')
+                u_handle = axs[3].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
+                                             tfm_w_profiles[f'{side}_u_profile'].T, cmap='RdBu')
+                v_handle = axs[4].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
+                                             tfm_w_profiles[f'{side}_v_profile'].T, cmap='RdBu')
+                msl_handle = axs[5].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
+                                               tfm_w_profiles[f'{side}_msl_profile'].T, cmap='viridis')
+                for ax in axs:
+                    [ax.axvline(this_t, c='k', ls=':') for this_t in all_sonde_dts.astype('datetime64[s]').astype('O')]
+                fig.colorbar(hpa_handle, ax=axs[0], label='hPa', orientation='vertical')
+                fig.colorbar(temp_handle, ax=axs[1], label='°C', orientation='vertical')
+                fig.colorbar(dew_handle, ax=axs[2], label='°C', orientation='vertical')
+                fig.colorbar(u_handle, ax=axs[3], label='m/s', orientation='vertical')
+                fig.colorbar(v_handle, ax=axs[4], label='m/s', orientation='vertical')
+                fig.colorbar(msl_handle, ax=axs[5], label='m', orientation='vertical')
+                fig.suptitle(f'{date_i_want.strftime("%Y-%m-%d")}\n{side.capitalize()} Representative Profiles')
+                fig.savefig(save_path)
+                plt.close(fig)
 
     return tfm_w_profiles
 
@@ -1191,7 +1262,7 @@ if __name__ == '__main__':
     print('Adding satellite data to tobac data')
     tfm_ctt = add_goes_data_to_tobac_path(tfm_ts, client, should_debug=should_debug)
     tfm_seabreeze = add_seabreeze_to_features(tfm_ctt, client, should_debug=should_debug)
-    tfm_w_profiles = add_radiosonde_data(tfm_seabreeze)
+    tfm_w_profiles = add_radiosonde_data(tfm_seabreeze, should_debug=should_debug)
     tfm_w_sfc = add_madis_data(tfm_w_profiles)
     tfm_w_aerosols = add_sfc_aerosol_data(tfm_w_sfc)
     # Compute aircraft aerosol passes here
