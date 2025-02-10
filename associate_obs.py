@@ -23,7 +23,7 @@ from matplotlib import use as mpluse
 from cartopy import crs as ccrs
 from cartopy import feature as cfeat
 from matplotlib.path import Path
-from numba import njit
+from numba import njit, prange
 
 import pyart
 from cmweather.cm_colorblind import ChaseSpectral, plasmidis, turbone
@@ -41,7 +41,7 @@ if USE_DASK:
 @njit(parallel=True)
 def identify_side(dts, lons, lats, tfm_times, seabreeze, grid_lon, grid_lat):
     seabreezes = np.zeros(lons.shape)
-    for i in np.arange(seabreezes.shape[0]):
+    for i in prange(seabreezes.shape[0]):
         lon = lons[i]
         lat = lats[i]
         this_dt = dts[i]
@@ -93,6 +93,7 @@ def add_seabreeze_to_features(tfm, client=None, should_debug=False):
             ax.add_feature(cfeat.STATES.with_scale('50m'))
             ax.add_feature(USCOUNTIES.with_scale('5m'))
             fig.savefig(save_path)
+            plt.close(fig)
     feature_seabreezes = identify_side(tfm.feature_time.values.astype('datetime64[s]').astype(float), tfm.feature_lon.values, tfm.feature_lat.values, tfm.time.values.astype('datetime64[s]').astype(float), 
                                     tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.values, tfm.lat.values)
     tfm = tfm.assign({
@@ -106,6 +107,42 @@ def add_seabreeze_to_features(tfm, client=None, should_debug=False):
             for i in np.arange(tfm.time.shape[0]):
                 make_sbf_plot(i)
     return tfm
+
+
+def plot_radiosonde_data(this_sonde_data, this_pydt, this_lon, this_lat, sbf, tfm, save_path):
+    if not path.exists(save_path):
+        mpluse('Agg')
+        p = this_sonde_data['pres'].values
+        T = this_sonde_data['tdry'].values
+        Td = this_sonde_data['dp'].values
+        u = this_sonde_data['u_wind'].values
+        v = this_sonde_data['v_wind'].values
+        mask = mpcalc.resample_nn_1d(p,  np.logspace(4, 2))
+        fig = plt.figure()
+        if this_lon is None:
+            skew = SkewT(fig, subplot=(1, 1, 1))
+        else:
+            skew = SkewT(fig, subplot=(1, 2, 1))
+            ax = fig.add_subplot(1, 2, 2, projection=ccrs.PlateCarree())
+        skew.plot(p, T, 'r')
+        skew.plot(p, Td, 'lime')
+        skew.ax.scatter([T[0]], [p[0]], color='r', s=10, edgecolors='k', zorder=5)
+        skew.ax.scatter([Td[0]], [p[0]], color='lime', s=10, edgecolors='k', zorder=5)
+        skew.plot_barbs(p[mask], u[mask], v[mask])
+
+        skew.ax.set_title(f'{this_pydt.strftime("%Y-%m-%d %H:%M")}')
+        if this_lon is not None:
+            if sbf == -1:
+                ax.scatter(this_lon, this_lat, c='blue', s=50, marker='*', edgecolors='k', zorder=5)
+            elif sbf == -2:
+                ax.scatter(this_lon, this_lat, c='red', s=50, marker='*', edgecolors='k', zorder=5)
+            nearest_sbf_time_idx = np.argmin(np.abs(tfm.time.data.astype('datetime64[s]').astype('O') - this_pydt))
+            this_sbf = tfm.seabreeze.isel(time=nearest_sbf_time_idx)
+            ax.pcolormesh(tfm.lon, tfm.lat, this_sbf.transpose(*tfm.lon.dims), transform=ccrs.PlateCarree(), zorder=1, alpha=0.25, cmap='RdBu')
+            ax.add_feature(cfeat.STATES.with_scale('50m'))
+            ax.add_feature(USCOUNTIES.with_scale('5m'))
+        fig.tight_layout()
+        fig.savefig(save_path)
 
 
 def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
@@ -294,34 +331,7 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
 
         if should_debug:
             save_path = f'./debug-figs-{this_pydt.strftime("%Y%m%d")}/profiles/{this_pydt.strftime("%Y%m%d_%H%M")}.png'
-            if not path.exists(save_path):
-                p = this_sonde_data.pres.values * units.hPa
-                T = this_sonde_data.tdry.values * units.degC
-                Td = this_sonde_data.dp.values * units.degC
-                u = this_sonde_data.u_wind.values * units.m / units.s
-                v = this_sonde_data.v_wind.values * units.m / units.s
-                mask = mpcalc.resample_nn_1d(p.m,  np.logspace(4, 2))
-                fig = plt.figure()
-                skew = SkewT(fig, subplot=(1, 2, 1))
-                ax = fig.add_subplot(1, 2, 2, projection=ccrs.PlateCarree())
-                skew.plot(p, T, 'r')
-                skew.plot(p, Td, 'lime')
-                skew.ax.scatter([T[0]], [p[0]], color='r', s=10, edgecolors='k', zorder=5)
-                skew.ax.scatter([Td[0]], [p[0]], color='lime', s=10, edgecolors='k', zorder=5)
-                skew.plot_barbs(p[mask], u[mask], v[mask])
-
-                skew.ax.set_title(f'{this_pydt.strftime("%Y-%m-%d %H:%M")}')
-
-                if sbf == -1:
-                    ax.scatter(this_lon, this_lat, c='blue', s=50, marker='*', edgecolors='k', zorder=5)
-                elif sbf == -2:
-                    ax.scatter(this_lon, this_lat, c='red', s=50, marker='*', edgecolors='k', zorder=5)
-                nearest_sbf_time_idx = np.argmin(np.abs(tfm.time.data.astype('datetime64[s]') - this_dt.astype('datetime64[s]')))
-                this_sbf = tfm.seabreeze.isel(time=nearest_sbf_time_idx)
-                ax.pcolormesh(tfm.lon, tfm.lat, this_sbf.transpose(*tfm.lon.dims), transform=ccrs.PlateCarree(), zorder=1, alpha=0.25, cmap='RdBu')
-                ax.add_feature(cfeat.STATES.with_scale('50m'))
-                ax.add_feature(USCOUNTIES.with_scale('5m'))
-                fig.savefig(save_path)
+            plot_radiosonde_data(this_sonde_data, this_pydt, this_lon, this_lat, sbf, tfm, save_path)
 
 
         otp_check = np.array([-999])
@@ -412,16 +422,22 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
                 fig.set_size_inches(1800*px, 1800*px)
                 hpa_handle = axs[0].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
                                                tfm_w_profiles[f'{side}_pressure_profile'].T, cmap='viridis')
+                axs[0].set_title('Pressure')
                 temp_handle = axs[1].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
                                                 tfm_w_profiles[f'{side}_temperature_profile'].T, cmap='turbo')
+                axs[1].set_title('Temperature')
                 dew_handle = axs[2].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
                                                tfm_w_profiles[f'{side}_dewpoint_profile'].T, cmap='BrBG')
+                axs[2].set_title('Dewpoint')
                 u_handle = axs[3].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
                                              tfm_w_profiles[f'{side}_u_profile'].T, cmap='RdBu')
+                axs[3].set_title('East component Wind')
                 v_handle = axs[4].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
                                              tfm_w_profiles[f'{side}_v_profile'].T, cmap='RdBu')
+                axs[4].set_title('North component Wind')
                 msl_handle = axs[5].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
                                                tfm_w_profiles[f'{side}_msl_profile'].T, cmap='viridis')
+                axs[5].set_title('Height')
                 for ax in axs:
                     [ax.axvline(this_t, c='k', ls=':') for this_t in all_sonde_dts.astype('datetime64[s]').astype('O')]
                 fig.colorbar(hpa_handle, ax=axs[0], label='hPa', orientation='vertical')
@@ -467,7 +483,7 @@ def identify_madis(tfmtime, madis_ds_temp, madis_ds_dew, madis_ds_time, madis_ds
     return maritime_temp, maritime_dew, continental_temp, continental_dew
 
 
-def add_madis_data(tfm):
+def add_madis_data(tfm, should_debug=False, client=None):
     date_i_want = tfm.time.data[0].astype('datetime64[D]').astype(dt)
     grid_max_lon = tfm.lon.max().compute()
     grid_min_lon = tfm.lon.min().compute()
@@ -505,13 +521,44 @@ def add_madis_data(tfm):
     madis_ds_lon[madis_ds_invalid] = np.nan
     madis_ds_lon = madis_ds_lon.compute()
     polyline = gpd.read_file(f'/Volumes/LtgSSD/analysis/sam_polyline/{date_i_want.strftime("%Y-%m-%d")}_interpolated.json').set_index('index')
-    maritime_temp, maritime_dew, continental_temp, continental_dew = identify_madis(tfm.time.data.astype('datetime64[s]'), madis_ds_temp, madis_ds_dew,
-               madis_ds_time.astype('datetime64[s]'), madis_ds_lat, madis_ds_lon, polyline)
+    maritime_temp, maritime_dew, continental_temp, continental_dew = identify_madis(tfm.time.data.astype('datetime64[s]').astype(float), madis_ds_temp, madis_ds_dew,
+               madis_ds_time.astype('datetime64[s]').astype(float), madis_ds_lat, madis_ds_lon, polyline)
     tfm_w_sfc = tfm.copy()
     tfm_w_sfc.maritime_dewpoint_profile.transpose('vertical_levels', 'time').data[0, :][~np.isnan(maritime_dew)] = maritime_dew[~np.isnan(maritime_dew)] - 273.15
     tfm_w_sfc.maritime_temperature_profile.transpose('vertical_levels', 'time').data[0, :][~np.isnan(maritime_temp)] = maritime_temp[~np.isnan(maritime_temp)] - 273.15
     tfm_w_sfc.continental_dewpoint_profile.transpose('vertical_levels', 'time').data[0, :][~np.isnan(continental_dew)] = continental_dew[~np.isnan(continental_dew)] - 273.15
     tfm_w_sfc.continental_temperature_profile.transpose('vertical_levels', 'time').data[0, :][~np.isnan(continental_temp)] = continental_temp[~np.isnan(continental_temp)] - 273.15
+    if should_debug:
+        timeseries_fig = plt.figure()
+        ax = timeseries_fig.gca()
+        ax.plot(tfm.time.data, tfm_w_sfc.maritime_temperature_profile.transpose('vertical_levels', 'time').data[0, :], label='Maritime Temperature', color='blue')
+        ax.plot(tfm.time.data, tfm_w_sfc.continental_temperature_profile.transpose('vertical_levels', 'time').data[0, :], label='Continental Temperature', color='red')
+        ax.set_xlabel('Time')
+        ax.set_ylabel('Temperature (°C)')
+        ax.legend()
+        ax.set_title(f'Temperature Time Series for {date_i_want.strftime("%Y-%m-%d")}')
+        timeseries_fig.savefig(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/sfc/madis_temp_timeseries.png')
+        plt.close(timeseries_fig)
+
+    all_res = []
+    if should_debug:
+        for side, sidenum in zip(['continental', 'maritime'], [-2, -1]):
+            for i in np.arange(tfm.time.shape[0]):
+                this_profile = pd.DataFrame({
+                    'pres' : tfm_w_sfc[f'{side}_pressure_profile'].compute().transpose('time', 'vertical_levels')[i, :],
+                    'tdry' : tfm_w_sfc[f'{side}_temperature_profile'].compute().transpose('time', 'vertical_levels')[i, :],
+                    'dp' : tfm_w_sfc[f'{side}_dewpoint_profile'].compute().transpose('time', 'vertical_levels')[i, :],
+                    'u_wind' : tfm_w_sfc[f'{side}_u_profile'].compute().transpose('time', 'vertical_levels')[i, :],
+                    'v_wind' : tfm_w_sfc[f'{side}_v_profile'].compute().transpose('time', 'vertical_levels')[i, :],
+                    'alt' : tfm_w_sfc[f'{side}_msl_profile'].compute().transpose('time', 'vertical_levels')[i, :]
+                })
+                save_path = f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/sfc/{side}_{str(i).zfill(4)}.png'
+                if client is not None:
+                    all_res.append(client.submit(plot_radiosonde_data, this_profile, tfm.time.data.astype('datetime64[s]').astype('O')[i], None, None, sidenum, None, save_path))
+                else:
+                    plot_radiosonde_data(this_profile, tfm.time.data.astype('datetime64[s]').astype('O')[i], None, None, sidenum, None, save_path)
+        if client is not None:
+            client.gather(all_res)
     return tfm_w_sfc
 
 
@@ -749,7 +796,6 @@ def apply_coord_transforms(tfm, should_debug=False):
     tfm = tfm.assign({'feature_lat' : (('feature'), feature_lat), 'feature_lon' : (('feature'), feature_lon)})
     if should_debug:
         date_i_want = tfm.time.data[0].astype('datetime64[D]').astype(dt)
-        # Coords testing plots
         ax_extent = [tfm.lon.min()-0.25, tfm.lon.max()+0.25, tfm.lat.min()-0.25, tfm.lat.max()+0.25]
         x2d, y2d = np.meshgrid(tfm.x.data, tfm.y.data)
         fig, axs = plt.subplots(2, 3, subplot_kw={'projection': ccrs.PlateCarree()})
@@ -1241,7 +1287,7 @@ if __name__ == '__main__':
         client = None
     date_i_want = sys.argv[1]
     date_i_want = dt.strptime(date_i_want, '%Y-%m-%d')
-    should_debug = sys.argv[2] == '--debug'
+    should_debug = ((len(sys.argv) > 2) and (sys.argv[2] == '--debug'))
     if should_debug:
         pth(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/coords').mkdir(parents=True, exist_ok=True)
         pth(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/tobac_ts').mkdir(parents=True, exist_ok=True)
@@ -1263,7 +1309,7 @@ if __name__ == '__main__':
     tfm_ctt = add_goes_data_to_tobac_path(tfm_ts, client, should_debug=should_debug)
     tfm_seabreeze = add_seabreeze_to_features(tfm_ctt, client, should_debug=should_debug)
     tfm_w_profiles = add_radiosonde_data(tfm_seabreeze, should_debug=should_debug)
-    tfm_w_sfc = add_madis_data(tfm_w_profiles)
+    tfm_w_sfc = add_madis_data(tfm_w_profiles, should_debug=should_debug, client=client)
     tfm_w_aerosols = add_sfc_aerosol_data(tfm_w_sfc)
     # Compute aircraft aerosol passes here
     tfm_sounding_stats = compute_sounding_stats(tfm_w_aerosols)
@@ -1271,4 +1317,4 @@ if __name__ == '__main__':
     # Compute aircraft below cloud passes here
     print('Converting to track time')
     tfm_obs = convert_to_track_time(tfm_w_parents)
-    tfm_obs.to_zarr(tfm_path.replace('.zarr', '-obs.zarr'), zarr_format=2)
+    tfm_obs.to_zarr(tfm_path.replace('.zarr', '-obs.zarr'))
