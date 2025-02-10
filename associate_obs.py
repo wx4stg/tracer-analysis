@@ -22,7 +22,6 @@ from matplotlib import pyplot as plt
 from matplotlib import use as mpluse
 from cartopy import crs as ccrs
 from cartopy import feature as cfeat
-import cmweather
 from matplotlib.path import Path
 from numba import njit
 
@@ -76,12 +75,36 @@ def interp_sounding_times(tfm_time, prev_idx, new_idx, data):
     return interper(times_between)
 
 
-def add_seabreeze_to_features(tfm):
+def add_seabreeze_to_features(tfm, client=None, should_debug=False):
+    def make_sbf_plot(time_idx):
+        tfm_time = tfm.isel(time=time_idx)
+        time = tfm_time.time.data.astype('datetime64[s]').astype('O').item()
+        save_path = f'./debug-figs-{time.strftime("%Y%m%d")}/seabreeze/{time_idx}.png'
+        if not path.exists(save_path):
+            tfm_feat_mask = (tfm_time.feature_time_index == time_idx)
+            tfm_feat_time = tfm_time.isel(feature=tfm_feat_mask)
+            mpluse('Agg')
+            fig = plt.figure()
+            ax = plt.axes(projection=ccrs.PlateCarree())
+            ax.pcolormesh(tfm_feat_time.lon, tfm_feat_time.lat, tfm_feat_time.seabreeze.transpose(*tfm_feat_time.lon.dims), transform=ccrs.PlateCarree(), zorder=1, alpha=0.25, cmap='RdBu')
+            ax.pcolormesh(tfm_feat_time.lon, tfm_feat_time.lat, tfm_feat_time.segmentation_mask, transform=ccrs.PlateCarree(), zorder=2, cmap='Greys', vmin=0, vmax=1, alpha=0.5)
+            ax.scatter(tfm_feat_time.feature_lon, tfm_feat_time.feature_lat, c=tfm_feat_time.feature_seabreeze, transform=ccrs.PlateCarree(), zorder=3, s=2, cmap='RdBu')
+            ax.set_title(f'Features + Area + Seabreeze\n{time.strftime("%Y-%m-%d %H:%M:%S")}')
+            ax.add_feature(cfeat.STATES.with_scale('50m'))
+            ax.add_feature(USCOUNTIES.with_scale('5m'))
+            fig.savefig(save_path)
     feature_seabreezes = identify_side(tfm.feature_time.values.astype('datetime64[s]').astype(float), tfm.feature_lon.values, tfm.feature_lat.values, tfm.time.values.astype('datetime64[s]').astype(float), 
                                     tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.values, tfm.lat.values)
     tfm = tfm.assign({
         'feature_seabreeze' : (('feature',), feature_seabreezes)
     })
+    if should_debug:
+        if client is not None:
+            res = client.map(make_sbf_plot, np.arange(tfm.time.shape[0]))
+            res = client.gather(res)
+        else:
+            for i in np.arange(tfm.time.shape[0]):
+                make_sbf_plot(i)
     return tfm
 
 
@@ -748,7 +771,7 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want, client=None, shou
                             f'{tfmvar}col_total: {tfm_feat_time[f"feature_{tfmvar}col_total"].data}\n' \
                             f'{tfmvar}zdrwt_total: {tfm_feat_time.feature_zdrwt_total.data}\n'
                 fig, axs = plt.subplots(1, 3, subplot_kw={'projection': ccrs.PlateCarree()})
-                fig.set_size_inches(1800*px, 1200*px)
+                fig.set_size_inches(900*px, 600*px)
                 rmd = pyart.graph.RadarMapDisplay(rdr)
                 seg_handle = axs[1].pcolormesh(tfm_feat_time.lon, tfm_feat_time.lat, tfm_feat_time.segmentation_mask, transform=ccrs.PlateCarree(), cmap='viridis', zorder=2)
                 fig.colorbar(seg_handle, ax=axs[1], orientation='horizontal', label='Segmentation Mask')
@@ -1163,11 +1186,11 @@ if __name__ == '__main__':
     if not path.exists(f'/Volumes/LtgSSD/nexrad_zarr/{date_i_want.strftime('%B').upper()}/{date_i_want.strftime('%Y%m%d')}'):
         print('I don\'t have EET for this day, computing it')
         add_eet_to_radar_data(date_i_want, client)
-    tfm_eet = add_eet_to_tobac_data(tfm_coord, date_i_want, client, should_debug)
+    tfm_eet = add_eet_to_tobac_data(tfm_coord, date_i_want, client, should_debug=should_debug)
     tfm_ts = add_timeseries_data_to_toabc_path(tfm_eet, date_i_want, client=client, should_debug=should_debug)
     print('Adding satellite data to tobac data')
-    tfm_ctt = add_goes_data_to_tobac_path(tfm_ts, client)
-    tfm_seabreeze = add_seabreeze_to_features(tfm_ctt)
+    tfm_ctt = add_goes_data_to_tobac_path(tfm_ts, client, should_debug=should_debug)
+    tfm_seabreeze = add_seabreeze_to_features(tfm_ctt, client, should_debug=should_debug)
     tfm_w_profiles = add_radiosonde_data(tfm_seabreeze)
     tfm_w_sfc = add_madis_data(tfm_w_profiles)
     tfm_w_aerosols = add_sfc_aerosol_data(tfm_w_sfc)
