@@ -195,7 +195,7 @@ if __name__ == '__main__':
               seg.opts(alpha=0.5, tools=['hover']) *
               stations *
               polygon * lower_limit * eastern_limit
-              ).opts(width=2200, height=1200, xlim=(xmin, xmax), ylim=(ymin, ymax)) #1500, 1000 for 1080p
+              ).opts(width=2200, height=1200, xlim=(xmin, xmax), ylim=(ymin, ymax)) #1500, 1000 for 1080p; 2200, 1200 for 1440p
     control_column = pn.Column(date_slider, seg_tick, channel_select, satellite_tick, radar_sel, hgx_tick, lch_tick, iah_tick, hou_tick, stations_tick, div_tick, write_btn)
     col = pn.Row(pn.Column(my_map), control_column)
 

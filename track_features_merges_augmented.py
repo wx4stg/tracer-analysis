@@ -115,7 +115,7 @@ def add_eet_to_tobac_data(tfm, date_i_want, client=None, should_debug=False):
             wide_seg_handle = axs[1].pcolormesh(features_at_time.lon, features_at_time.lat, features_at_time.segmentation_mask, transform=ccrs.PlateCarree())
             fig.colorbar(wide_eet_handle, ax=axs[0], orientation='horizontal', label='Echo Top Height')
             fig.colorbar(wide_seg_handle, ax=axs[1], orientation='horizontal', label='Segmentation Mask')
-            axs[0].set_title('Echo Tops at time: ' + str(tfm.time.data[time_idx]))
+            axs[0].set_title('Echo Tops at time:\n' + tfm.time.data[time_idx].astype('datetime64[s]').astype('O').strftime('%Y-%m-%d %H:%M:%S'))
             axs[1].set_title('Segmentation Mask')
         for j, feat_to_find in enumerate(features_at_time.feature.data):
             this_seg_mask = features_at_time.segmentation_mask.data
@@ -225,7 +225,7 @@ def find_satellite_temp_for_feature(tfm_time, feature_i_want, area_i_want, feat_
     # Create coordinate systems
     tpcs = coords.TangentPlaneCartesianSystem(ctrLat=tfm_time.center_lat,
                                               ctrLon=tfm_time.center_lon, ctrAlt=0)
-    satsys = coords.GeostationaryFixedGridSystem(subsat_lon=area_i_want.nominal_satellite_subpoint_lon.data.item(),
+    satsys = coords.GeostationaryFixedGridSystem(subsat_lon=-75.,#area_i_want.nominal_satellite_subpoint_lon.data.item(),
                                                  sweep_axis='x', ellipse=(ltg_ell[0] - 14e3 + feat_echotop, ltg_ell[1] - 6e3 + feat_echotop))
 
     # Get the ECEF coordinates of the grid centers of the rectangle containing the feature
@@ -283,9 +283,9 @@ def find_satellite_temp_for_feature(tfm_time, feature_i_want, area_i_want, feat_
             axs[2].set_xlim(this_feature_x2d.min()-5000, this_feature_x2d.max()+5000)
             axs[2].set_ylim(this_feature_y2d.min()-5000, this_feature_y2d.max()+5000)
 
-            axs[0].set_title(f'Channel 13 Brightness Temp at time {date_i_want.strftime("%Y-%m-%d %H:%M:%S")}')
+            axs[0].set_title(f'Channel 13 Brightness Temp\n{date_i_want.strftime("%Y-%m-%d %H:%M:%S")}')
             axs[1].set_title('Segmentation Mask')
-            axs[2].set_title(f'Feature {feature_i_want} C13 temperature: {min_sat_temp:.2f} K')
+            axs[2].set_title(f'Feature {feature_i_want}\nTemperature: {min_sat_temp:.2f} K')
             fig.colorbar(ctt_wide, ax=axs[0], orientation='horizontal', label='Channel 13 Brightness Temp (K)')
             fig.colorbar(seg_wide, ax=axs[1], orientation='horizontal', label='Segmentation Mask')
             fig.colorbar(seg_zoom_scatter, ax=axs[2], orientation='horizontal', label='Channel 13 Brightness Temp (K)')
@@ -314,7 +314,8 @@ def add_goes_data_to_tobac_path(tfm, client=None, should_debug=False):
                 mpluse('Agg')
                 sat_y2d, sat_x2d = np.meshgrid(satellite_data.y.data, satellite_data.x.data)
                 sat_z2d = np.zeros_like(sat_x2d)
-                satsys = coords.GeostationaryFixedGridSystem(subsat_lon=satellite_data.nominal_satellite_subpoint_lon.data.item(), sweep_axis='x')
+                satsys = coords.GeostationaryFixedGridSystem(subsat_lon=-75.,
+                                                             sweep_axis='x')
 
                 satellite_ECEF = satsys.toECEF(sat_x2d.flatten(), sat_y2d.flatten(), sat_z2d.flatten())
                 tpcs = coords.TangentPlaneCartesianSystem(ctrLat=tfm_time.center_lat, ctrLon=tfm_time.center_lon, ctrAlt=0)

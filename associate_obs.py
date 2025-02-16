@@ -6,6 +6,7 @@ import pandas as pd
 from datetime import datetime as dt
 from os import path, listdir
 from pathlib import Path as pth
+from shutil import rmtree
 from glob import glob
 import numpy as np
 from metpy.interpolate import interpolate_1d
@@ -260,7 +261,13 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
                     }
     for hour_to_pull in range(24):
         acars_conn = spy.acars_data(str(date_i_want.year).zfill(4), str(date_i_want.month).zfill(2), str(date_i_want.day).zfill(2), str(hour_to_pull).zfill(2))
-        this_hour_acars_list = [prof for prof in acars_conn.list_profiles() if prof[:3] in airports_i_want.keys()]
+        try:
+            this_hour_acars_list = [prof for prof in acars_conn.list_profiles() if prof[:3] in airports_i_want.keys()]
+        except Exception as e:
+            if 'HTTP Error' in str(e):
+                continue
+            else:
+                raise e
         acars_all_list.extend(this_hour_acars_list)
     acars_profile_dts = []
     acars_profile_lons = []
@@ -301,7 +308,13 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
             with warnings.catch_warnings():
                 warnings.filterwarnings('ignore')
                 acars_conn = spy.acars_data(str(this_pydt.year).zfill(4), str(this_pydt.month).zfill(2), str(this_pydt.day).zfill(2), str(this_pydt.hour).zfill(2))
-                sounding = acars_conn.get_profile(f.replace('ACARS+', ''), hush=True, clean_it=True)
+                try:
+                    sounding = acars_conn.get_profile(f.replace('ACARS+', ''), hush=True, clean_it=True)
+                except Exception as e:
+                    if 'HTTP Error' in str(e):
+                        continue
+                    else:
+                        raise e
             this_sonde_data = pd.DataFrame(
                 {'pres' : sounding['p'].to('hPa').m,
                 'tdry' : sounding['T'].to('degC').m,
@@ -624,12 +637,20 @@ def compute_sounding_stats(tfm):
                 dew_botch = dew_i.copy()
                 dew_botch[-1] = -50 * units.degC
                 spc_hum_botch = mpcalc.specific_humidity_from_dewpoint(pressure_i, dew_botch)
-                mlecape = calc_ecape(height_i, pressure_i, temp_botch, spc_hum_botch, u_i, v_i, cape_type='mixed_layer')
-                mlcape, mlcin = mpcalc.mixed_layer_cape_cin(pressure_i, temp_botch, dew_botch)
+                try:
+                    mlecape = calc_ecape(height_i, pressure_i, temp_botch, spc_hum_botch, u_i, v_i, cape_type='mixed_layer')
+                    mlcape, mlcin = mpcalc.mixed_layer_cape_cin(pressure_i, temp_botch, dew_botch)
+                except Exception:
+                    mlecape = 0 * units('J/kg')
+                    mlcape = 0 * units('J/kg')
+                    mlcin = 0 * units('J/kg')
             lcl, _ = mpcalc.lcl(pressure_i[0], temp_i[0], dew_i[0])
             lfc, _ = mpcalc.lfc(pressure_i, temp_i, dew_i)
             el, _ = mpcalc.el(pressure_i, temp_i, dew_i)
-            ccl, _, _ = mpcalc.ccl(pressure_i, temp_i, dew_i)
+            try:
+                ccl, _, _ = mpcalc.ccl(pressure_i, temp_i, dew_i)
+            except IndexError:
+                ccl = np.nan * units.m
 
             if type(mlecape) == int and mlecape == 0:
                 mlecape = 0 * units('J/kg')
@@ -1317,4 +1338,9 @@ if __name__ == '__main__':
     # Compute aircraft below cloud passes here
     print('Converting to track time')
     tfm_obs = convert_to_track_time(tfm_w_parents)
-    tfm_obs.to_zarr(tfm_path.replace('.zarr', '-obs.zarr'))
+    final_out_path = tfm_path.replace('.zarr', '-obs.zarr')
+    try:
+        tfm_obs.to_zarr(final_out_path)
+    except TypeError:
+        rmtree(final_out_path)
+        tfm_obs.to_zarr(final_out_path, zarr_format=2)
