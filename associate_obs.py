@@ -800,7 +800,7 @@ def apply_coord_transforms(tfm, should_debug=False):
     tfm = tfm.assign({'lat' : (('x', 'y'), grid_lat), 'lon' : (('x', 'y'), grid_lon)})
 
 
-    satsys = coords.GeostationaryFixedGridSystem(subsat_lon=-75.19999694824219, sweep_axis='x')#, ellipse=ltg_ell)
+    satsys = coords.GeostationaryFixedGridSystem(subsat_lon=-75., sweep_axis='x')#, ellipse=ltg_ell)
     grid_g16_scan_x, grid_g16_scan_y, _ = satsys.fromECEF(*grid_ecef_coords)
     grid_g16_scan_x = grid_g16_scan_x.reshape(x2d.shape)
     grid_g16_scan_y = grid_g16_scan_y.reshape(x2d.shape)
@@ -1328,6 +1328,8 @@ if __name__ == '__main__':
     tfm_ts = add_timeseries_data_to_toabc_path(tfm_eet, date_i_want, client=client, should_debug=should_debug)
     print('Adding satellite data to tobac data')
     tfm_ctt = add_goes_data_to_tobac_path(tfm_ts, client, should_debug=should_debug)
+
+
     tfm_seabreeze = add_seabreeze_to_features(tfm_ctt, client, should_debug=should_debug)
     tfm_w_profiles = add_radiosonde_data(tfm_seabreeze, should_debug=should_debug)
     tfm_w_sfc = add_madis_data(tfm_w_profiles, should_debug=should_debug, client=client)

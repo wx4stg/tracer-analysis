@@ -28,7 +28,7 @@ def read_tobac_ds(tobac_path):
     tpcs = coords.TangentPlaneCartesianSystem(ctrLat=radar_lat, ctrLon=radar_lon, ctrAlt=0)
     geosys = coords.GeographicSystem()
     ltg_ell = lightning_ellipse_rev[1]
-    satsys = coords.GeostationaryFixedGridSystem(subsat_lon=-75.19999694824219, sweep_axis='x', ellipse=ltg_ell)
+    satsys = coords.GeostationaryFixedGridSystem(subsat_lon=-75., sweep_axis='x', ellipse=ltg_ell)
     grid_ecef_coords = tpcs.toECEF(tfm.x.data, tfm.y.data, np.zeros_like(tfm.x.data))
     grid_lon, grid_lat, _ = geosys.fromECEF(*grid_ecef_coords)
     grix_g16_scan_x, grix_g16_scan_y, _ = satsys.fromECEF(*grid_ecef_coords)

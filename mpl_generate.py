@@ -1,4 +1,4 @@
-from os import path, listdir, getcwd
+from os import path, listdir, getcwd, remove
 from datetime import datetime as dt, timedelta
 from pathlib import Path
 import warnings
@@ -104,12 +104,16 @@ def queue_surface(times, date_i_want, client=None):
 def plot_satellite(path_to_read, this_time, min_x, max_x, min_y, max_y, channel_select):
     print('Plotting satellite')
     mpl_use('agg')
-    sat = xr.open_dataset(path_to_read)
+    try:
+        sat = xr.open_dataset(path_to_read)
+    except Exception as e:
+        remove(path_to_read)
+        raise e
     padding = .001
     area_i_want = sat.sel(y=slice(max_y+padding, min_y-padding), x=slice(min_x-padding, max_x+padding))
     geosys = coords.GeographicSystem()
     ltg_ell = lightning_ellipse_rev[1]
-    satsys = coords.GeostationaryFixedGridSystem(subsat_lon=sat.nominal_satellite_subpoint_lon.data.item(), sweep_axis='x', ellipse=ltg_ell)
+    satsys = coords.GeostationaryFixedGridSystem(subsat_lon=-75, sweep_axis='x', ellipse=ltg_ell)
     this_satellite_scan_x, this_satellite_scan_y = np.meshgrid(area_i_want.x, area_i_want.y)
     sat_ecef_X, sat_ecef_Y, sat_ecef_Z = satsys.toECEF(this_satellite_scan_x.flatten(), this_satellite_scan_y.flatten(), np.zeros_like(this_satellite_scan_x.flatten()))
     sat_lon, sat_lat, _ = geosys.fromECEF(sat_ecef_X, sat_ecef_Y, sat_ecef_Z)

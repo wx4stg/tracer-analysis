@@ -48,7 +48,7 @@ def apply_coord_transforms(tfm):
     tfm = tfm.assign({'lat' : (('x', 'y'), grid_lat), 'lon' : (('x', 'y'), grid_lon)})
 
 
-    satsys = coords.GeostationaryFixedGridSystem(subsat_lon=-75.19999694824219, sweep_axis='x', ellipse=ltg_ell)
+    satsys = coords.GeostationaryFixedGridSystem(subsat_lon=-75., sweep_axis='x', ellipse=ltg_ell)
     grid_g16_scan_x, grid_g16_scan_y, _ = satsys.fromECEF(*grid_ecef_coords)
     grid_g16_scan_x = grid_g16_scan_x.reshape(x2d.shape)
     grid_g16_scan_y = grid_g16_scan_y.reshape(x2d.shape)

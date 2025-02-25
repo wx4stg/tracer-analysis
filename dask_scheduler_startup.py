@@ -10,7 +10,7 @@ if __name__ == '__main__':
     print(uname().nodename)
     for file in listdir():
         if file.endswith('.json') and file.startswith('config-'):
-            if file.replace('.json', '').replace('config-', '') in uname().nodename:
+            if file.replace('.json', '').replace('config-', '') in uname().nodename.replace('-', ''):
                 my_conf = json.load(open(file))
                 break
 
