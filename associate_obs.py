@@ -3,6 +3,7 @@
 
 import xarray as xr
 import pandas as pd
+from act.io import read_icartt
 from datetime import datetime as dt
 from os import path, listdir
 from pathlib import Path as pth
@@ -108,6 +109,73 @@ def add_seabreeze_to_features(tfm, client=None, should_debug=False):
             for i in np.arange(tfm.time.shape[0]):
                 make_sbf_plot(i)
     return tfm
+
+
+def identify_aircraft_below_feature(air_ds, tfm):
+    in_feature_times = identify_side(air_ds.time.data.astype('datetime64[s]').astype(float), air_ds.lon.data, air_ds.lat.data, tfm.time.data.astype('datetime64[s]').astype(float),
+              tfm.segmentation_mask.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.data, tfm.lat.data)
+    air_ds['inside_feature'] = xr.DataArray(in_feature_times, dims='time')
+    closest_to_tfm_time_indices = np.argmin(np.abs(air_ds.time.data[:, None] - tfm.time.data), axis=1)
+    air_ds['closest_tfm_time'] = xr.DataArray(tfm.time.data[closest_to_tfm_time_indices], dims='time')
+    features_to_select = np.unique(in_feature_times)
+    features_to_select = features_to_select[~np.isnan(features_to_select)]
+    cloud_passes = tfm.sel(feature=features_to_select)
+    ccl_hpa = cloud_passes.feature_ccl
+    indices_of_profile_ccl = xr.ufuncs.absolute(cloud_passes.feature_pressure_profile - ccl_hpa).argmin(dim='vertical_levels')
+    ccl_z = cloud_passes.feature_msl_profile.isel(vertical_levels=indices_of_profile_ccl)
+    below_feature = np.zeros(air_ds.inside_feature.data.shape, dtype=bool)
+    for cap_to_check in ccl_z:
+        spec_idx_inside_feat = np.where(air_ds.inside_feature.data == cap_to_check.feature.data)[0]
+        below_feature_mask = air_ds.alt[spec_idx_inside_feat] < cap_to_check.data
+        below_feature[spec_idx_inside_feat] = below_feature_mask
+    air_ds['below_feature'] = xr.DataArray(below_feature, dims='time')
+    return air_ds
+
+
+def below_cloud_processing(tfm, date_i_want):
+    spec_flight_dirs = sorted(glob(f'/Volumes/LtgSSD/air_SPEC_state/RF*_ict_{date_i_want.strftime("%Y%m%d")}*'))
+    spec_ds = []
+    for spec_flight_dir in spec_flight_dirs:
+        page0_data_path = path.join(spec_flight_dir, f'ESCAPE-Page0_Learjet_{date_i_want.strftime("%Y%m%d")}_R0.ict')
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ds = read_icartt(page0_data_path)
+        
+        rf_num = path.basename(spec_flight_dir).split('_')[0]
+        spec_hires_position_dir = f'/Volumes/LtgSSD/AircraftTracks/Learjet/L_{rf_num}/'
+        spec_hires_position_file = glob(spec_hires_position_dir+'*.txt')[0]
+        nonpublic_df = pd.read_csv(spec_hires_position_file, sep='\\s+')
+        nonpublic_df['pydatetime'] = pd.to_datetime(nonpublic_df['yyyy'].astype(str).str.zfill(4) +
+                                                nonpublic_df['month'].astype(str).str.zfill(2) +
+                                                nonpublic_df['day'].astype(str).str.zfill(2) +
+                                                nonpublic_df['hh'].astype(str).str.zfill(2) +
+                                                nonpublic_df['mm'].astype(str).str.zfill(2) +
+                                                nonpublic_df['ss'].astype(str).str.zfill(2), format='%Y%m%d%H%M%S')
+        trimmed_npdf = nonpublic_df[(nonpublic_df['pydatetime'] >= ds.time.data[0]) & (nonpublic_df['pydatetime'] <= ds.time.data[-1])]
+        if np.all(trimmed_npdf['pydatetime'].values == ds.time.data):
+            ds['lat'] = xr.DataArray(trimmed_npdf['Latitude(deg)'].values, dims='time')
+            ds['lon'] = xr.DataArray(trimmed_npdf['Longitude(deg)'].values, dims='time')
+
+        spec_ds.append(ds)
+    if len(spec_ds) > 1:
+        spec_ds = xr.concat(spec_ds, dim='time')
+    else:
+        spec_ds = spec_ds[0]
+    spec_alt_ft = spec_ds.Palt * units.feet
+    spec_alt_m = spec_alt_ft.data.to('m').magnitude
+    spec_ds['alt'] = xr.DataArray(spec_alt_m, dims='time')
+
+    spec_ds = identify_aircraft_below_feature(spec_ds, tfm)
+    spec_below_cloud = spec_ds.isel(time=spec_ds['below_feature'].data)
+    spec_below_cloud.to_netcdf(f'/Volumes/LtgSSD/analysis/below_cloud/{date_i_want.strftime("%Y%m%d")}_spec_below_cloud.nc')
+
+
+
+    nrc_flights = sorted(glob(f'/Volumes/LtgSSD/air_NRC_state/atmospheric-state_{date_i_want.strftime("%Y%m%d")}*.nc'))
+    nrc_ds = xr.open_mfdataset(nrc_flights).load().isel(sps1=0)
+    nrc_ds = identify_aircraft_below_feature(nrc_ds, tfm)
+    nrc_below_cloud = nrc_ds.isel(time=nrc_ds['below_feature'].data)
+    nrc_below_cloud.to_netcdf(f'/Volumes/LtgSSD/analysis/below_cloud/{date_i_want.strftime("%Y%m%d")}_nrc_below_cloud.nc')
 
 
 def plot_radiosonde_data(this_sonde_data, this_pydt, this_lon, this_lat, sbf, tfm, save_path):
@@ -1337,7 +1405,7 @@ if __name__ == '__main__':
     # Compute aircraft aerosol passes here
     tfm_sounding_stats = compute_sounding_stats(tfm_w_aerosols)
     tfm_w_parents = generate_seg_mask_cell_track(generate_seg_mask_cell_track(tfm_sounding_stats, convert_to='track'), convert_to='cell')
-    # Compute aircraft below cloud passes here
+    below_cloud_processing(tfm_w_parents, date_i_want)
     print('Converting to track time')
     tfm_obs = convert_to_track_time(tfm_w_parents)
     final_out_path = tfm_path.replace('.zarr', '-obs.zarr')
