@@ -36,6 +36,10 @@ def plot_surface(madis_ds, time_i_want):
     from metpy.units import units
     cmweather.__version__
     mpl_use('agg')
+    path_to_save = path.join('/Volumes','LtgSSD','analysis', 'mpl-generated', 'sfcwinds', f'{time_i_want.strftime("%Y%m%d_%H%M%S")}.png')
+    if path.exists(path_to_save):
+        print('already')
+        return 0
     lower_time_bound = np.array([time_i_want-timedelta(hours=1)]).astype('datetime64[s]')[0]
     upper_time_bound = np.array([time_i_want]).astype('datetime64[s]')[0]
     before = (madis_ds.observationTime <= upper_time_bound)
@@ -65,7 +69,6 @@ def plot_surface(madis_ds, time_i_want):
     px = 1/plt.rcParams['figure.dpi']
     fig.set_size_inches(2048*px, 2048*px)
     extent = ax.get_tightbbox(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
-    path_to_save = path.join('/Volumes','LtgSSD','analysis', 'mpl-generated', 'sfcwinds', f'{time_i_want.strftime("%Y%m%d_%H%M%S")}.png')
     Path(path.dirname(path_to_save)).mkdir(parents=True, exist_ok=True)
     fig.savefig(path_to_save, bbox_inches=extent, transparent=True)
     print(path_to_save)
@@ -104,6 +107,10 @@ def queue_surface(times, date_i_want, client=None):
 def plot_satellite(path_to_read, this_time, min_x, max_x, min_y, max_y, channel_select):
     print('Plotting satellite')
     mpl_use('agg')
+    path_to_save = path.join('/Volumes','LtgSSD','analysis', 'mpl-generated', 'sat', f'{channel_select.replace(" ", "")}_{this_time.strftime("%Y%m%d_%H%M%S")}.png')
+    if path.exists(path_to_save):
+        print('already')
+        return 0
     try:
         sat = xr.open_dataset(path_to_read)
     except Exception as e:
@@ -133,7 +140,6 @@ def plot_satellite(path_to_read, this_time, min_x, max_x, min_y, max_y, channel_
     px = 1/plt.rcParams['figure.dpi']
     fig.set_size_inches(2048*px, 2048*px)
     extent = ax.get_tightbbox(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
-    path_to_save = path.join('/Volumes','LtgSSD','analysis', 'mpl-generated', 'sat', f'{channel_select.replace(" ", "")}_{this_time.strftime("%Y%m%d_%H%M%S")}.png')
     Path(path.dirname(path_to_save)).mkdir(parents=True, exist_ok=True)
     fig.savefig(path_to_save, bbox_inches=extent, transparent=True)
     print(path_to_save)
@@ -167,6 +173,10 @@ def plot_radar(time, dataset_time, radar, var_to_plot):
     radar_files = [path.join(path_to_radar, f) for f in sorted(listdir(path_to_radar)) if f.startswith(radar)]
     radar_times = [dt.strptime(path.basename(f)[4:-4], '%Y%m%d_%H%M%S') for f in radar_files]
     ds_timedeltas = [abs(time - t) for t in radar_times]
+    path_to_save = path.join('/Volumes','LtgSSD','analysis', 'mpl-generated', radar, f'{var_to_plot.replace(" ", "")}_{time.strftime("%Y%m%d_%H%M%S")}.png')
+    if path.exists(path_to_save):
+        print('already')
+        return 0
     if len(ds_timedeltas) == 0 or min(ds_timedeltas) > timedelta(minutes=15):
         print('fail')
         return 0
@@ -206,7 +216,10 @@ def plot_radar(time, dataset_time, radar, var_to_plot):
         sweep_i_want = 1
         vmin = 0
         vmax = nyq/2
-    rdr = rdr.extract_sweeps([sweep_i_want])
+    try:
+        rdr = rdr.extract_sweeps([sweep_i_want])
+    except Exception as e:
+        raise ValueError(f'Invalid Radar Sweep {sweep_i_want} in {radar_files[np.argmin(ds_timedeltas)]}')
     lats, lons, _ = rdr.get_gate_lat_lon_alt(0)
     data2plot = rdr.fields[data2plot]['data']
     fig = plt.figure()
@@ -217,7 +230,6 @@ def plot_radar(time, dataset_time, radar, var_to_plot):
     px = 1/plt.rcParams['figure.dpi']
     fig.set_size_inches(2048*px, 2048*px)
     extent = ax.get_tightbbox(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
-    path_to_save = path.join('/Volumes','LtgSSD','analysis', 'mpl-generated', radar, f'{var_to_plot.replace(" ", "")}_{time.strftime("%Y%m%d_%H%M%S")}.png')
     Path(path.dirname(path_to_save)).mkdir(parents=True, exist_ok=True)
     fig.savefig(path_to_save, bbox_inches=extent, transparent=True)
     print(path_to_save)
@@ -257,10 +269,13 @@ if __name__ == '__main__':
     tfm = apply_coord_transforms(tfm)
     times = tfm.time.data
     all_res = []
-
+    print('radar!')
     radar_res = queue_radar(times, date_i_want, client)
     all_res.extend(radar_res)
-    
+    print('surface!')
+    sfc_res = queue_surface(times, date_i_want, client)
+    all_res.extend(sfc_res)
+    print('satellite!')
     sat_min_x = tfm.g16_scan_x.min().compute().data
     sat_max_x = tfm.g16_scan_x.max().compute().data
     sat_min_y = tfm.g16_scan_y.min().compute().data
@@ -268,8 +283,6 @@ if __name__ == '__main__':
     sat_res = queue_satellite(times, date_i_want, sat_min_x, sat_max_x, sat_min_y, sat_max_y, client)
     all_res.extend(sat_res)
 
-    sfc_res = queue_surface(times, date_i_want, client)
-    all_res.extend(sfc_res)
 
     print('GATHERING!')
     client.gather(all_res)
