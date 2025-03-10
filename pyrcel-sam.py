@@ -69,4 +69,4 @@ if __name__ == '__main__':
             print('Processing', i)
             sam_pyrcel_out.loc[i] = [i, compute_active_ccn(row, 0.1), compute_active_ccn(row, 0.4), compute_active_ccn(row, 0.6), compute_active_ccn(row, 1.0)]
     print('Writing CSV...')
-    sam_pyrcel_out.to_csv(sys.argv[2])
+    sam_pyrcel_out.to_csv(sys.argv[2], index=False)
