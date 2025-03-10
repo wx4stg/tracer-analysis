@@ -4,7 +4,6 @@ from os import listdir, path
 from pathlib import Path
 from shutil import rmtree
 from datetime import datetime as dt, timedelta
-import sys
 
 from dask.distributed import Client
 
@@ -302,10 +301,8 @@ def add_goes_data_to_tobac_path(tfm, client=None, should_debug=False):
         if len(feature_indicies_at_time) == 0:
             return 0, 0, 0
         tfm_time = tfm.isel(feature=feature_indicies_at_time, time=this_feature_time_idx)
-        this_timestep_sat_temps = np.full(tfm_time.feature.shape[0], np.nan)
-        if this_feature_time_idx not in download_results['tobac_idx'].values:
-            return np.nan, 0, 0
-        goes_file_path = download_results[download_results['tobac_idx'] == this_feature_time_idx]['file'].values[0]
+        satellite_time_to_use = tfm_time.closest_satellite_time.data.astype('datetime64[s]').item()
+        goes_file_path = download_results[download_results['valid'].astype('datetime64[s]') == satellite_time_to_use]['file'].values[0]
         goes_file_path = path.join('/Volumes/LtgSSD/', goes_file_path)
         satellite_data = xr.open_dataset(goes_file_path).sel(y=goes_yslice, x=goes_xsclice)
         if should_debug:
@@ -355,6 +352,7 @@ def add_goes_data_to_tobac_path(tfm, client=None, should_debug=False):
                 fig.tight_layout()
                 fig.savefig(save_path)
                 plt.close(fig)
+        this_timestep_sat_temps = np.full(tfm_time.feature.shape[0], np.nan)
         for j, feat_id in enumerate(tfm_time.feature.data):
             this_feat = tfm_time.sel(feature=feat_id)
             this_feature_time_idx = this_feat.feature_time_index.data.item()
@@ -379,23 +377,8 @@ def add_goes_data_to_tobac_path(tfm, client=None, should_debug=False):
     download_results['valid'] = download_results[['start', 'end']].mean(axis=1)
     valid_times = download_results['valid'].values.astype('datetime64[s]')
     tobac_times = tfm.time.data.astype('datetime64[s]')
-    time_diffs = np.abs(tobac_times[:, np.newaxis] - valid_times)
-    goes_time_matching_tobac_indices = np.argmin(time_diffs, axis=0)
-    download_results['tobac_idx'] = goes_time_matching_tobac_indices
-    for idx, num_occurrences in zip(*np.unique(goes_time_matching_tobac_indices, return_counts=True)):
-        if num_occurrences > 1:
-            dup_df = download_results[download_results['tobac_idx'] == idx]
-            time_to_match = tobac_times[idx]
-            diff = np.abs(dup_df['valid'].values - time_to_match)
-            download_results.drop(dup_df[diff > diff.min()].index, inplace=True)
-    download_results.reset_index(drop=True, inplace=True)
-    long_time_gaps = np.diff(download_results['valid'].values).astype('timedelta64[s]') >= 601
-    gap_time_start = download_results['valid'].values[:-1][long_time_gaps]
-    gap_time_end = download_results['valid'].values[1:][long_time_gaps]
-    for gap in zip(gap_time_start, gap_time_end):
-        gap = np.array(gap).astype('datetime64[s]')
-        print(f'>>>>>>>Warning, long gap between {gap[0]} and {gap[1]}.>>>>>>>')
-    
+    valid_time_closest_to_tobac = valid_times[np.argmin(np.abs(tobac_times[:, np.newaxis] - valid_times), axis=1)]
+    tfm['closest_satellite_time'] = (('time'), valid_time_closest_to_tobac)
     goes_max_x = tfm.g16_scan_x.max().data.item()
     goes_min_x = tfm.g16_scan_x.min().data.item()
     goes_max_y = tfm.g16_scan_y.max().data.item()
