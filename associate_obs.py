@@ -17,6 +17,7 @@ from metpy.plots import USCOUNTIES, SkewT
 from ecape.calc import calc_ecape
 import sounderpy as spy
 from scipy.interpolate import interp1d
+from scipy.io import loadmat
 import sys
 import warnings
 import geopandas as gpd
@@ -954,91 +955,117 @@ def apply_coord_transforms(tfm, should_debug=False):
 
 
 def add_timeseries_data_to_toabc_path(tobac_data, date_i_want, client=None, should_debug=False):
-    def make_debug_plot_for_featid(feat_time_index, radar_time):
+    def make_debug_plot_for_featid(this_feat_time_idx, radar_time, meltlayer):
         mpluse('agg')
         px = 1/plt.rcParams['figure.dpi']
-        radar_filepath = f'/Volumes/LtgSSd/nexrad_l2/{radar_time.strftime('%Y%m%d')}/KHGX{radar_time.strftime("%Y%m%d_%H%M%S")}_V06'
-        if not path.exists(radar_filepath):
-            return 0
-        rdr = pyart.io.read(radar_filepath)
-        tfm_time = tfm.isel(time=feat_time_index)
-        tfm_time = tfm_time.isel(feature=(tfm_time.feature_time_index == feat_time_index))
-        axis_limits = [tfm_time.lon.min(), tfm_time.lon.max(), tfm_time.lat.min(), tfm_time.lat.max()]
-        for feat_id in tfm_time.feature.data:
-            tfm_feat_time = tfm_time.sel(feature=feat_id)
-            if np.isnan(tfm_feat_time.feature_zdrcol.data.item()):
+        radar_filepath = f'/Volumes/LtgSSD/nexrad_gridded/{radar_time.strftime("%B").upper()}/{radar_time.strftime("%Y%m%d")}/KHGX{radar_time.strftime("%Y%m%d_%H%M%S")}_V06_grid.nc'
+        tfm_time = tfm.isel(time=this_feat_time_idx)
+        tfm_time = tfm_time.isel(feature=(tfm_time.feature_time_index == this_feat_time_idx))
+        if this_feat_time_idx != tfm.time.data.shape[0] - 1:
+            next_time = tfm.time.data[this_feat_time_idx + 1]
+        else:
+            next_time = tfm.time.data[this_feat_time_idx] + np.timedelta64(10, 'm')
+
+        this_time = tfm_time.time.data
+        radar_time = this_time.astype('datetime64[s]').astype(dt).item()
+        radar_filepath = f'/Volumes/LtgSSD/nexrad_gridded/{radar_time.strftime("%B").upper()}/{radar_time.strftime("%Y%m%d")}/KHGX{radar_time.strftime("%Y%m%d_%H%M%S")}_V06_grid.nc'
+        radar_ds = xr.open_dataset(radar_filepath).isel(time=0)
+        closest_to_melt_layer = np.argmin(np.abs(radar_ds.z.data - meltlayer))
+        above_melt_layer = radar_ds.isel(z=slice(closest_to_melt_layer, None))
+        above_melt_layer_zdr_thresholded = (above_melt_layer.differential_reflectivity > 1.0).sum(dim='z').data.astype(float)
+        above_melt_layer_zdr_thresholded[above_melt_layer_zdr_thresholded == 0] = np.nan
+        above_melt_layer_kdp_thresholded = (above_melt_layer.KDP_CSU > 0.75).sum(dim='z').data.astype(float)
+        above_melt_layer_kdp_thresholded[above_melt_layer_kdp_thresholded == 0] = np.nan
+        lightning_filepaths = glob(f'/Volumes/LtgSSD/{int(date_i_want.strftime("%m"))}/6sensor_minimum/LYLOUT_{date_i_want.strftime("%y%m%d")}*.nc')
+        if len(lightning_filepaths) != 1:
+            raise ValueError('Expected exactly one lightning data file, but found:', len(lightning_filepaths))
+        lightning_filepath = lightning_filepaths[0]
+        lightning = xr.open_dataset(lightning_filepath)
+        lightning_data_at_time = lightning.sel(grid_time=slice(radar_time, next_time))
+        flash_mask = (lightning_data_at_time.flash_time_start.data > this_time) & (lightning_data_at_time.flash_time_end.data < next_time)
+        event_mask = (lightning_data_at_time.event_time.data > this_time) & (lightning_data_at_time.event_time.data < next_time)
+        lightning_data_at_time = lightning_data_at_time.isel(number_of_flashes=flash_mask, number_of_events=event_mask)
+        x2d, y2d = np.meshgrid(radar_ds.x.values, radar_ds.y.values)
+        for feature_i_want in tfm_time.feature.data:
+            tfm_feat_time = tfm_time.sel(feature=feature_i_want)
+            path_to_save = f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/tobac_ts/{feature_i_want}.png'
+            if path.exists(path_to_save):
                 continue
-            for tfmvar in ['z', 'zdr', 'rhvdeficit', 'kdp']:
-                path_to_save = f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/tobac_ts/{tfmvar}_{feat_id}.png'
-                if path.exists(path_to_save):
-                    continue
-                if tfmvar == 'z':
-                    radarvar = 'reflectivity'
-                    cmap = ChaseSpectral
-                    vmin = -10
-                    vmax = 80
-                    text_str = f'Area: {tfm_feat_time.feature_area.data.item():.1f}\n' \
-                            f'Grid Cells: {tfm_feat_time.feature_grid_cell_count.data}\n' \
-                            f'Threshold Max: {tfm_feat_time.feature_threshold_max.data}\n' \
-                            f'Max Z: {tfm_feat_time.feature_maxrefl.data}'
-                else:
-                    if tfmvar == 'zdr':
-                        radarvar = 'differential_reflectivity'
-                        cmap = turbone
-                        vmin = -2
-                        vmax = 8
-                    elif tfmvar == 'rhvdeficit':
-                        radarvar = 'cross_correlation_ratio'
-                        cmap = plasmidis
-                        vmin = 0
-                        vmax = 1
-                    elif tfmvar == 'kdp':
-                        radarvar = 'differential_phase'
-                        cmap = phase
-                        vmin = 0
-                        vmax = 360
-                    text_str = f'{tfmvar}vol: {tfm_feat_time[f"feature_{tfmvar}vol"].data}\n' \
-                            f'{tfmvar}col: {tfm_feat_time[f"feature_{tfmvar}col"].data}\n' \
-                            f'{tfmvar}col_mean: {tfm_feat_time[f"feature_{tfmvar}col_mean"].data:.1f}\n' \
-                            f'{tfmvar}col_total: {tfm_feat_time[f"feature_{tfmvar}col_total"].data}\n' \
-                            f'{tfmvar}zdrwt_total: {tfm_feat_time.feature_zdrwt_total.data}\n'
-                fig, axs = plt.subplots(1, 3, subplot_kw={'projection': ccrs.PlateCarree()})
-                fig.set_size_inches(900*px, 600*px)
-                rmd = pyart.graph.RadarMapDisplay(rdr)
-                seg_handle = axs[1].pcolormesh(tfm_feat_time.lon, tfm_feat_time.lat, tfm_feat_time.segmentation_mask, transform=ccrs.PlateCarree(), cmap='viridis', zorder=2)
-                fig.colorbar(seg_handle, ax=axs[1], orientation='horizontal', label='Segmentation Mask')
-                rmd.plot_ppi_map(radarvar, sweep=0, vmin=vmin, vmax=vmax, cmap=cmap, colorbar_label=radarvar, embellish=False, lat_lines=[], lon_lines=[], ax=axs[0], fig=fig, colorbar_orient='horizontal', zorder=2)
+            feature_segm_mask = tfm_feat_time.segmentation_mask == feature_i_want
+            feature_composite_refl = radar_ds.reflectivity.max(dim='z').data
+            feature_composite_refl[~feature_segm_mask] = np.nan
+            ys_of_feature = tfm_feat_time.y.data * feature_segm_mask.max(dim='x')
+            ys_of_feature[~feature_segm_mask.max(dim='x')] = np.nan
+            feature_min_y = ys_of_feature.min().item()
+            feature_max_y = ys_of_feature.max().item()
 
-                axs[1].scatter(tfm_feat_time.feature_lon, tfm_feat_time.feature_lat, transform=ccrs.PlateCarree(), color='red', s=1, zorder=3)
-                axs[1].set_title('Segmentation Mask')
+            xs_of_feature = tfm_feat_time.x.data * feature_segm_mask.max(dim='y')
+            xs_of_feature[~feature_segm_mask.max(dim='y')] = np.nan
+            feature_min_x = xs_of_feature.min().item()
+            feature_max_x = xs_of_feature.max().item()
+            if tfm_feat_time.feature_area == 0:
+                feature_min_x = tfm_feat_time.feature_projection_x_coordinate.data.item()-1000
+                feature_max_x = tfm_feat_time.feature_projection_x_coordinate.data.item()+1000
+                feature_min_y = tfm_feat_time.feature_projection_y_coordinate.data.item()-1000
+                feature_max_y = tfm_feat_time.feature_projection_y_coordinate.data.item()+1000
+                zdr_thresh_vmax = 0
+                kdp_thresh_vmax = 0
+            else:
+                zdr_thresh_vmax = np.nanmax(above_melt_layer_zdr_thresholded[feature_segm_mask])
+                if zdr_thresh_vmax == 0 or np.isnan(zdr_thresh_vmax):
+                    zdr_thresh_vmax = 1
+                kdp_thresh_vmax = np.nanmax(above_melt_layer_kdp_thresholded[feature_segm_mask])
+                if kdp_thresh_vmax == 0 or np.isnan(kdp_thresh_vmax):
+                    kdp_thresh_vmax = 1
 
-                segmask_trans = tfm_feat_time.segmentation_mask#.transpose(*tfm_feat_time.lon.dims) # TODO: FIX FROM ISSUE #7
-                feat_grid_lons = tfm_feat_time.lon.data.flatten()[segmask_trans.data.flatten() == feat_id]
-                feat_grid_lats = tfm_feat_time.lat.data.flatten()[segmask_trans.data.flatten() == feat_id]
-
-                rmd.plot_ppi_map(radarvar, sweep=0, vmin=vmin, vmax=vmax, cmap=cmap, colorbar_label=radarvar, embellish=False, lat_lines=[], lon_lines=[], ax=axs[2], fig=fig, colorbar_flag=False, zorder=2)
-                axs[2].scatter(feat_grid_lons, feat_grid_lats, transform=ccrs.PlateCarree(), color='gold', marker='*', edgecolors='black', s=3, zorder=3)
-                if len(feat_grid_lons) > 0:
-                    axs[2].set_extent([feat_grid_lons.min()-0.1, feat_grid_lons.max()+0.1, feat_grid_lats.min()-0.1, feat_grid_lats.max()+0.1], crs=ccrs.PlateCarree())
-                else:
-                    axs[2].set_extent([tfm_feat_time.feature_lon.data-0.1, tfm_feat_time.feature_lon.data+0.1, tfm_feat_time.feature_lat.data-0.1, tfm_feat_time.feature_lat.data+0.1], crs=ccrs.PlateCarree())
-                axs[2].set_title(f'Feature {feat_id}')
-                axs[2].text(0.02, 0.02, text_str, transform=axs[2].transAxes)
-                for i, ax in enumerate(axs):
-                    ax.add_feature(cfeat.STATES.with_scale('50m'), zorder=4, alpha=0.5)
-                    ax.add_feature(USCOUNTIES.with_scale('5m'), zorder=4, alpha=0.2)
-                    if i != 2:
-                        ax.set_extent(axis_limits, crs=ccrs.PlateCarree())
-
-                fig.tight_layout()
-                fig.savefig(path_to_save)
-                plt.close(fig)
+            fig, axs = plt.subplots(1, 4, figsize=(20, 7))
+            feature_segm_mask_trasparent = feature_segm_mask.data.copy().astype(float)
+            feature_segm_mask_trasparent[feature_segm_mask] = np.nan
+            reflhandle = axs[0].pcolormesh(tfm.lon, tfm.lat, radar_ds.reflectivity.max(dim='z').data, cmap=ChaseSpectral, vmin=-10, vmax=80)
+            axs[0].pcolormesh(tfm.lon, tfm.lat, feature_segm_mask_trasparent, cmap='Greys', alpha=0.75)
+            axs[0].scatter(lightning_data_at_time.flash_center_longitude, lightning_data_at_time.flash_center_latitude, c=lightning_data_at_time.flash_id, cmap='tab20', s=10, linewidths=0.5, edgecolors='black')
+            axs[0].set_xlabel('Longitude')
+            axs[0].set_ylabel('Latitude')
+            axs[0].set_title(f'Composite Z, segmask, flash centers\n{radar_time.strftime("%H:%M:%S")}')
+            fig.colorbar(reflhandle, ax=axs[0], label='Composite Reflectivity (dBZ)', orientation='horizontal')
+            axs[1].pcolormesh(x2d/1000, y2d/1000, feature_composite_refl, cmap=ChaseSpectral, vmin=-10, vmax=80)
+            axs[1].set_xlim(feature_min_x/1000, feature_max_x/1000)
+            axs[1].set_ylim(feature_min_y/1000, feature_max_y/1000)
+            flash_handle = axs[1].scatter(lightning_data_at_time.event_x/1000, lightning_data_at_time.event_y/1000, c=lightning_data_at_time.event_parent_flash_id, cmap='tab20b', s=3, linewidths=0.5, edgecolors='black')
+            axs[1].scatter(lightning_data_at_time.flash_ctr_x/1000, lightning_data_at_time.flash_ctr_y/1000, c=lightning_data_at_time.flash_id, cmap='tab20b', marker='*', s=50, linewidths=1, edgecolors='black')
+            axs[1].scatter(lightning_data_at_time.flash_init_x/1000, lightning_data_at_time.flash_init_y/1000, c=lightning_data_at_time.flash_id, cmap='tab20b', marker='^', s=50, linewidths=1, edgecolors='black')
+            axs[1].set_xlabel('East-West Distance (km)')
+            axs[1].set_ylabel('North-South Distance (km)')
+            axs[1].set_title(f'Composite Reflectivity and Lightning\n{radar_time.strftime("%H:%M:%S")} through {next_time.astype("datetime64[s]").astype(dt).strftime("%H:%M:%S")}')
+            fig.colorbar(flash_handle, ax=axs[1], label='Flash ID', orientation='horizontal')
+            zdr_handle = axs[2].pcolormesh(radar_ds.x/1000, radar_ds.y/1000, above_melt_layer_zdr_thresholded, cmap='tab20b', vmin=0, vmax=zdr_thresh_vmax)
+            axs[2].pcolormesh(tfm.x/1000, tfm.y/1000, feature_segm_mask_trasparent, cmap='Greys_r', alpha=0.75)
+            axs[2].set_xlim(feature_min_x/1000, feature_max_x/1000)
+            axs[2].set_ylim(feature_min_y/1000, feature_max_y/1000)
+            axs[2].set_xlabel('East-West Distance (km)')
+            axs[2].set_ylabel('North-South Distance (km)')
+            axs[2].set_title(f'Grid cells with ZDR > 1.0 above {meltlayer} m AGL')
+            fig.colorbar(zdr_handle, ax=axs[2], label='ZDR Volume', orientation='horizontal')
+            kdp_handle = axs[3].pcolormesh(radar_ds.x/1000, radar_ds.y/1000, above_melt_layer_kdp_thresholded, cmap='tab20b', vmin=0, vmax=kdp_thresh_vmax)
+            axs[3].pcolormesh(tfm.x/1000, tfm.y/1000, feature_segm_mask_trasparent, cmap='Greys_r', alpha=0.75)
+            axs[3].set_xlim(feature_min_x/1000, feature_max_x/1000)
+            axs[3].set_ylim(feature_min_y/1000, feature_max_y/1000)
+            axs[3].set_xlabel('East-West Distance (km)')
+            axs[3].set_ylabel('North-South Distance (km)')
+            axs[3].set_title(f'Grid cells with KDP > 0.75 above {meltlayer} m AGL')
+            fig.colorbar(kdp_handle, ax=axs[3], label='KDP Volume', orientation='horizontal')
+            fig.suptitle(f'Feature ID: {feature_i_want} | Flash Count: {tfm_feat_time.feature_flash_count.data.item():.1f} | ZDR Volume: {tfm_feat_time.feature_zdrvol.data.item()} | KDP Volume: {tfm_feat_time.feature_kdpvol.data.item()}')
+            fig.tight_layout()
+            fig.savefig(path_to_save)
+            plt.close(fig)
         return 1
     tfm = tobac_data.copy()
     tobac_save_path = f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime('%Y%m%d')}/'
+    melt_layer = 0
     for f in listdir(tobac_save_path):
         if f.startswith('timeseries_data_melt') and f.endswith('.nc'):
             tobac_timeseries_path = path.join(tobac_save_path, f)
+            melt_layer = int(f.replace('timeseries_data_melt', '').replace('.nc', ''))
             break
     else:
         raise ValueError('>>>>>>>Unable to find timeseries data...>>>>>>>')
@@ -1050,14 +1077,26 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want, client=None, shou
 
     if should_debug:
         if client is not None:
+            tfm.feature_zdrcol.load()
+            tfm.feature_area.load()
+            tfm.feature_grid_cell_count.load()
+            tfm.feature_threshold_max.load()
+            tfm.feature_maxrefl.load()
+            for v in ['zdr', 'rhvdeficit', 'kdp']:
+                tfm[f'feature_{v}vol'].load()
+                tfm[f'feature_{v}col'].load()
+                tfm[f'feature_{v}col_mean'].load()
+                tfm[f'feature_{v}col_total'].load()
+            tfm.feature_flash_count.load()
+            tfm.feature_zdrwt_total.load()
             res = []
             for i, t in enumerate(tfm.time.data.astype('datetime64[s]').astype('O')):
-                res.append(client.submit(make_debug_plot_for_featid, i, t))
+                res.append(client.submit(make_debug_plot_for_featid, i, t, melt_layer))
             for promised_res in res:
-                this_res = promised_res.result()
+                _ = promised_res.result()
         else:
             for this_itr in enumerate(tfm.time.data.astype('datetime64[s]').astype('O')):
-                make_debug_plot_for_featid(*this_itr)
+                make_debug_plot_for_featid(*this_itr, melt_layer)
     return tfm
 
 
