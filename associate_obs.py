@@ -157,25 +157,27 @@ def below_cloud_processing(tfm, date_i_want):
             ds['lon'] = xr.DataArray(trimmed_npdf['Longitude(deg)'].values, dims='time')
 
         spec_ds.append(ds)
-    if len(spec_ds) > 1:
-        spec_ds = xr.concat(spec_ds, dim='time')
-    else:
-        spec_ds = spec_ds[0]
-    spec_alt_ft = spec_ds.Palt * units.feet
-    spec_alt_m = spec_alt_ft.data.to('m').magnitude
-    spec_ds['alt'] = xr.DataArray(spec_alt_m, dims='time')
+    if len(spec_ds) > 0:
+        if len(spec_ds) > 1:
+            spec_ds = xr.concat(spec_ds, dim='time')
+        elif len(spec_ds) == 1:
+            spec_ds = spec_ds[0]
+        spec_alt_ft = spec_ds.Palt * units.feet
+        spec_alt_m = spec_alt_ft.data.to('m').magnitude
+        spec_ds['alt'] = xr.DataArray(spec_alt_m, dims='time')
 
-    spec_ds = identify_aircraft_below_feature(spec_ds, tfm)
-    spec_below_cloud = spec_ds.isel(time=spec_ds['below_feature'].data)
-    spec_below_cloud.to_netcdf(f'/Volumes/LtgSSD/analysis/below_cloud/{date_i_want.strftime("%Y%m%d")}_spec_below_cloud.nc')
+        spec_ds = identify_aircraft_below_feature(spec_ds, tfm)
+        spec_below_cloud = spec_ds.isel(time=spec_ds['below_feature'].data)
+        spec_below_cloud.to_netcdf(f'/Volumes/LtgSSD/analysis/below_cloud/{date_i_want.strftime("%Y%m%d")}_spec_below_cloud.nc')
 
 
 
     nrc_flights = sorted(glob(f'/Volumes/LtgSSD/air_NRC_state/atmospheric-state_{date_i_want.strftime("%Y%m%d")}*.nc'))
-    nrc_ds = xr.open_mfdataset(nrc_flights).load().isel(sps1=0)
-    nrc_ds = identify_aircraft_below_feature(nrc_ds, tfm)
-    nrc_below_cloud = nrc_ds.isel(time=nrc_ds['below_feature'].data)
-    nrc_below_cloud.to_netcdf(f'/Volumes/LtgSSD/analysis/below_cloud/{date_i_want.strftime("%Y%m%d")}_nrc_below_cloud.nc')
+    if len(nrc_flights) > 0:
+        nrc_ds = xr.open_mfdataset(nrc_flights).load().isel(sps1=0)
+        nrc_ds = identify_aircraft_below_feature(nrc_ds, tfm)
+        nrc_below_cloud = nrc_ds.isel(time=nrc_ds['below_feature'].data)
+        nrc_below_cloud.to_netcdf(f'/Volumes/LtgSSD/analysis/below_cloud/{date_i_want.strftime("%Y%m%d")}_nrc_below_cloud.nc')
 
 
 def plot_radiosonde_data(this_sonde_data, this_pydt, this_lon, this_lat, sbf, tfm, save_path):
