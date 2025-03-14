@@ -670,7 +670,7 @@ def compute_sounding_stats(tfm):
         height = tfm[f'{side}_msl_profile'].data * units.m
         u = tfm[f'{side}_u_profile'].data * (units.m/units.s)
         v = tfm[f'{side}_v_profile'].data * (units.m/units.s)
-        ccn = tfm[f'{side}_ccn_profile'].data
+        ccn = tfm[f'{side}_ccn_profile_0.6'].data
 
         mlcapes = np.zeros(tfm.time.shape[0])
         mlcins = np.zeros(tfm.time.shape[0])
@@ -759,7 +759,7 @@ def compute_sounding_stats(tfm):
         'feature_dew_profile' : (('feature', 'vertical_levels'), feature_dew_profile),
         'feature_u_profile' : (('feature', 'vertical_levels'), feature_u_profile),
         'feature_v_profile' : (('feature', 'vertical_levels'), feature_v_profile),
-        'feature_ccn_profile' : (('feature', 'vertical_levels'), feature_ccn_profile),
+        'feature_ccn_profile_0.6' : (('feature', 'vertical_levels'), feature_ccn_profile),
         'feature_mlcape' : (('feature',), feature_mlcape),
         'feature_mlcin' : (('feature',), feature_mlcin),
         'feature_mlecape' : (('feature',), feature_mlecape),
@@ -824,6 +824,30 @@ def add_sfc_aerosol_data(tfm, ss_lower_bound=0.6, ss_upper_bound=0.8, ss_target=
         continental_times.extend(tamu_continental_time.tolist())
     else:
         print(f'Warning, {len(tamu_ccn_files)} TAMU CCN files found!')
+    guy_ccn_path = '/Volumes/LtgSSD/guy-ccn/CCN_20220702to20220910_TRACER_IOP.mat'
+    guy_ccn = loadmat(guy_ccn_path)
+    varnames = guy_ccn['CCN'][0][0].dtype.names
+    data_dict = {varname: guy_ccn['CCN'][0][0][varname].flatten() for varname in varnames}
+    guy_ccn_data = pd.DataFrame(data_dict)
+    guy_ccn_data['time'] = pd.to_datetime(guy_ccn_data['UTC']-719529, unit='D')
+    guy_ccn_data = guy_ccn_data.set_index('time', drop=True)
+    guy_ccn_this_day = guy_ccn_data.iloc[(guy_ccn_data.index.values >= tfm.time.data[0]) & (guy_ccn_data.index.values <= tfm.time.data[-1])]
+    if len(guy_ccn_this_day) > 0:
+        guy_ccn_this_day_this_SS = guy_ccn_this_day[(guy_ccn_this_day['SS_set'] >= ss_lower_bound) & (guy_ccn_this_day['SS_set'] <= ss_upper_bound)]
+        guy_ccn_times = guy_ccn_this_day_this_SS.index.values
+        guy_ccn_ccn = guy_ccn_this_day_this_SS['n0_all_ccn'].values
+        guy_lat = np.full(guy_ccn_times.shape, 29.33)
+        guy_lon = np.full(guy_ccn_times.shape, -95.74)
+        guy_ccn_sbf = identify_side(guy_ccn_times.astype('datetime64[s]').astype(float), guy_lon, guy_lat, tfm.time.compute().data.astype('datetime64[s]').astype(float),
+                                            tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.compute().data, tfm.lat.compute().data)
+        guy_ccn_maritime = guy_ccn_ccn[guy_ccn_sbf == -1]
+        guy_maritime_time = guy_ccn_times[guy_ccn_sbf == -1]
+        maritime_ccn.extend(guy_ccn_maritime.tolist())
+        maritime_times.extend(guy_maritime_time.tolist())
+        guy_ccn_continental = guy_ccn_ccn[guy_ccn_sbf == -2]
+        guy_continental_time = guy_ccn_times[guy_ccn_sbf == -2]
+        continental_ccn.extend(guy_ccn_continental.tolist())
+        continental_times.extend(guy_continental_time.tolist())
     continental_sorting = np.argsort(continental_times)
     continental_times = np.array(continental_times)[continental_sorting]
     continental_ccn = np.array(continental_ccn)[continental_sorting]
@@ -848,8 +872,8 @@ def add_sfc_aerosol_data(tfm, ss_lower_bound=0.6, ss_upper_bound=0.8, ss_target=
 
     tfm_w_aerosols = tfm.copy()
     tfm_w_aerosols = tfm_w_aerosols.assign({
-        'maritime_ccn_profile' : (('time', 'vertical_levels'), maritime_ccn_vert),
-        'continental_ccn_profile' : (('time', 'vertical_levels'), continental_ccn_vert)
+        f'maritime_ccn_profile_{ss_target:.1f}' : (('time', 'vertical_levels'), maritime_ccn_vert),
+        f'continental_ccn_profile_{ss_target:.1f}' : (('time', 'vertical_levels'), continental_ccn_vert)
     })
 
     return tfm_w_aerosols
@@ -1102,7 +1126,7 @@ def convert_to_track_time(tfmo):
     tfmo['feature_parent_track_id'] = tfmo.feature_parent_track_id.compute().astype('int32')
     vars_to_load_now = ['feature_time_index', 'feature_seabreeze', 'feature_area', 'feature_echotop', 'feature_flash_count', 'feature_flash_count_area_GT_4km',
                         'feature_flash_count_area_LE_4km', 'feature_kdpvol', 'feature_lat', 'feature_lon', 'feature_rhvdeficitvol', 'feature_zdrvol', 'feature_min_L2_MCMIPC',
-                        'feature_pressure_profile', 'feature_msl_profile', 'feature_temp_profile', 'feature_dew_profile', 'feature_u_profile', 'feature_v_profile', 'feature_ccn_profile',
+                        'feature_pressure_profile', 'feature_msl_profile', 'feature_temp_profile', 'feature_dew_profile', 'feature_u_profile', 'feature_v_profile', 'feature_ccn_profile_0.6',
                         'feature_mlcape', 'feature_mlcin', 'feature_mlecape', 'feature_lcl', 'feature_lfc', 'feature_el', 'feature_ccl']
     for var in vars_to_load_now:
         tfmo[var] = tfmo[var].compute()
@@ -1275,7 +1299,7 @@ def convert_to_track_time(tfmo):
 
 
         # Handle ccn profile (mean if already set)
-        this_feature_ccn_profile = tfmo.feature_ccn_profile.data[feature_idx, :]
+        this_feature_ccn_profile = tfmo['feature_ccn_profile_0.6'].data[feature_idx, :]
         previously_set_ccn_profile = track_ccn_profile[parent_track, time_idx, :]
         if np.all(np.isnan(previously_set_ccn_profile)):
             track_ccn_profile[parent_track, time_idx, :] = this_feature_ccn_profile
@@ -1359,7 +1383,7 @@ def convert_to_track_time(tfmo):
         'track_dew_profile' : (('track', 'time', 'vertical_levels'), track_dewpoint_profile),
         'track_u_profile' : (('track', 'time', 'vertical_levels'), track_u_profile),
         'track_v_profile' : (('track', 'time', 'vertical_levels'), track_v_profile),
-        'track_ccn_profile' : (('track', 'time', 'vertical_levels'), track_ccn_profile),
+        'track_ccn_profile_0.6' : (('track', 'time', 'vertical_levels'), track_ccn_profile),
         'track_mlcape' : (('track', 'time'), track_mlcape),
         'track_mlcin' : (('track', 'time'), track_mlcin),
         'track_mlecape' : (('track', 'time'), track_mlecape),
