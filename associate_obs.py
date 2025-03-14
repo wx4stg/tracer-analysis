@@ -503,22 +503,22 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
                 px = 1/plt.rcParams['figure.dpi']
                 fig, axs = plt.subplots(6, 1)
                 fig.set_size_inches(1800*px, 1800*px)
-                hpa_handle = axs[0].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
+                hpa_handle = axs[0].pcolormesh(tfm_w_profiles.time.data, tfm_w_profiles.vertical_levels.data,
                                                tfm_w_profiles[f'{side}_pressure_profile'].T, cmap='viridis')
                 axs[0].set_title('Pressure')
-                temp_handle = axs[1].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
+                temp_handle = axs[1].pcolormesh(tfm_w_profiles.time.data, tfm_w_profiles.vertical_levels.data,
                                                 tfm_w_profiles[f'{side}_temperature_profile'].T, cmap='turbo')
                 axs[1].set_title('Temperature')
-                dew_handle = axs[2].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
+                dew_handle = axs[2].pcolormesh(tfm_w_profiles.time.data, tfm_w_profiles.vertical_levels.data,
                                                tfm_w_profiles[f'{side}_dewpoint_profile'].T, cmap='BrBG')
                 axs[2].set_title('Dewpoint')
-                u_handle = axs[3].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
+                u_handle = axs[3].pcolormesh(tfm_w_profiles.time.data, tfm_w_profiles.vertical_levels.data,
                                              tfm_w_profiles[f'{side}_u_profile'].T, cmap='RdBu')
                 axs[3].set_title('East component Wind')
-                v_handle = axs[4].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
+                v_handle = axs[4].pcolormesh(tfm_w_profiles.time.data, tfm_w_profiles.vertical_levels.data,
                                              tfm_w_profiles[f'{side}_v_profile'].T, cmap='RdBu')
                 axs[4].set_title('North component Wind')
-                msl_handle = axs[5].pcolormesh(tfm_w_profiles.time, tfm_w_profiles.vertical_levels,
+                msl_handle = axs[5].pcolormesh(tfm_w_profiles.time.data, tfm_w_profiles.vertical_levels.data,
                                                tfm_w_profiles[f'{side}_msl_profile'].T, cmap='viridis')
                 axs[5].set_title('Height')
                 for ax in axs:
