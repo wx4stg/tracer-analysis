@@ -1054,7 +1054,7 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want, client=None, shou
             axs[3].set_ylabel('North-South Distance (km)')
             axs[3].set_title(f'Grid cells with KDP > 0.75 above {meltlayer} m AGL')
             fig.colorbar(kdp_handle, ax=axs[3], label='KDP Volume', orientation='horizontal')
-            fig.suptitle(f'Feature ID: {feature_i_want} | Flash Count: {tfm_feat_time.feature_flash_count.data.item():.1f} | ZDR Volume: {tfm_feat_time.feature_zdrvol.data.item()} | KDP Volume: {tfm_feat_time.feature_kdpvol.data.item()}')
+            fig.suptitle(f'Feature ID: {feature_i_want} | Flash Count: {tfm_feat_time.feature_flash_count.data.item():.1f} | ZDR Volume: {tfm_feat_time.feature_zdrvol.data.item()} | KDP Volume: {tfm_feat_time.feature_kdpvol.data.item()} | Max Z: {tfm_feat_time.feature_maxrefl.data.item():.2f} | Area: {tfm_feat_time.feature_area.data.item()}')
             fig.tight_layout()
             fig.savefig(path_to_save)
             plt.close(fig)
@@ -1077,7 +1077,6 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want, client=None, shou
 
     if should_debug:
         if client is not None:
-            tfm.feature_zdrcol.load()
             tfm.feature_area.load()
             tfm.feature_grid_cell_count.load()
             tfm.feature_threshold_max.load()
