@@ -961,12 +961,11 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want, client=None, shou
         radar_filepath = f'/Volumes/LtgSSD/nexrad_gridded/{radar_time.strftime("%B").upper()}/{radar_time.strftime("%Y%m%d")}/KHGX{radar_time.strftime("%Y%m%d_%H%M%S")}_V06_grid.nc'
         tfm_time = tfm.isel(time=this_feat_time_idx)
         tfm_time = tfm_time.isel(feature=(tfm_time.feature_time_index == this_feat_time_idx))
-        if this_feat_time_idx != tfm.time.data.shape[0] - 1:
-            next_time = tfm.time.data[this_feat_time_idx + 1]
-        else:
-            next_time = tfm.time.data[this_feat_time_idx] + np.timedelta64(10, 'm')
-
         this_time = tfm_time.time.data
+        if this_feat_time_idx == 0:
+            previous_time = tfm.time.data[this_feat_time_idx] - np.timedelta64(10, 'm')
+        else:
+            previous_time = tfm.time.data[this_feat_time_idx - 1]
         radar_time = this_time.astype('datetime64[s]').astype(dt).item()
         radar_filepath = f'/Volumes/LtgSSD/nexrad_gridded/{radar_time.strftime("%B").upper()}/{radar_time.strftime("%Y%m%d")}/KHGX{radar_time.strftime("%Y%m%d_%H%M%S")}_V06_grid.nc'
         radar_ds = xr.open_dataset(radar_filepath).isel(time=0)
@@ -981,9 +980,9 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want, client=None, shou
             raise ValueError('Expected exactly one lightning data file, but found:', len(lightning_filepaths))
         lightning_filepath = lightning_filepaths[0]
         lightning = xr.open_dataset(lightning_filepath)
-        lightning_data_at_time = lightning.sel(grid_time=slice(radar_time, next_time))
-        flash_mask = (lightning_data_at_time.flash_time_start.data > this_time) & (lightning_data_at_time.flash_time_end.data < next_time)
-        event_mask = (lightning_data_at_time.event_time.data > this_time) & (lightning_data_at_time.event_time.data < next_time)
+        lightning_data_at_time = lightning.sel(grid_time=slice(previous_time, this_time))
+        flash_mask = (lightning_data_at_time.flash_time_start.data > previous_time) & (lightning_data_at_time.flash_time_end.data < this_time)
+        event_mask = (lightning_data_at_time.event_time.data > previous_time) & (lightning_data_at_time.event_time.data < this_time)
         lightning_data_at_time = lightning_data_at_time.isel(number_of_flashes=flash_mask, number_of_events=event_mask)
         x2d, y2d = np.meshgrid(radar_ds.x.values, radar_ds.y.values)
         for feature_i_want in tfm_time.feature.data:
@@ -1036,7 +1035,8 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want, client=None, shou
             axs[1].scatter(lightning_data_at_time.flash_init_x/1000, lightning_data_at_time.flash_init_y/1000, c=lightning_data_at_time.flash_id, cmap='tab20b', marker='^', s=50, linewidths=1, edgecolors='black')
             axs[1].set_xlabel('East-West Distance (km)')
             axs[1].set_ylabel('North-South Distance (km)')
-            axs[1].set_title(f'Composite Reflectivity and Lightning\n{radar_time.strftime("%H:%M:%S")} through {next_time.astype("datetime64[s]").astype(dt).strftime("%H:%M:%S")}')
+            previous_time_dt = previous_time.astype("datetime64[s]").astype(dt)
+            axs[1].set_title(f'Composite Reflectivity and Lightning\n{previous_time_dt.strftime("%H:%M:%S")} through {radar_time.strftime("%H:%M:%S")}')
             fig.colorbar(flash_handle, ax=axs[1], label='Flash ID', orientation='horizontal')
             zdr_handle = axs[2].pcolormesh(radar_ds.x/1000, radar_ds.y/1000, above_melt_layer_zdr_thresholded, cmap='tab20b', vmin=0, vmax=zdr_thresh_vmax)
             axs[2].pcolormesh(tfm.x/1000, tfm.y/1000, feature_segm_mask_trasparent, cmap='Greys_r', alpha=0.75)
