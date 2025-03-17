@@ -1473,8 +1473,15 @@ if __name__ == '__main__':
     print('Converting to track time')
     tfm_obs = convert_to_track_time(tfm_w_parents)
     final_out_path = tfm_path.replace('.zarr', '-obs.zarr')
+    tfm_obs = tfm_obs.drop_vars(['feature_time_str'], errors='ignore')
+    client.close()
     try:
-        tfm_obs.to_zarr(final_out_path)
+        for dv in tfm_obs.data_vars:
+            if 'chunks' in tfm_obs[dv].encoding.keys():
+                del tfm_obs[dv].encoding['chunks']
+        if path.exists(final_out_path):
+            rmtree(final_out_path)
+        tfm_obs.chunk('auto').to_zarr(final_out_path)
     except TypeError:
         rmtree(final_out_path)
         tfm_obs.to_zarr(final_out_path, zarr_format=2)
