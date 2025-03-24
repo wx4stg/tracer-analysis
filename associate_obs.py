@@ -671,7 +671,8 @@ def compute_sounding_stats(tfm):
         height = tfm[f'{side}_msl_profile'].data * units.m
         u = tfm[f'{side}_u_profile'].data * (units.m/units.s)
         v = tfm[f'{side}_v_profile'].data * (units.m/units.s)
-        ccn = tfm[f'{side}_ccn_profile_0.6'].data
+        ccn6 = tfm[f'{side}_ccn_profile_0.6'].data
+        ccn4 = tfm[f'{side}_ccn_profile_0.4'].data
 
         mlcapes = np.zeros(tfm.time.shape[0])
         mlcins = np.zeros(tfm.time.shape[0])
@@ -742,8 +743,8 @@ def compute_sounding_stats(tfm):
             feature_dew_profile[matching_feat_idx, :] = dew[matching_time_idx, :]
             feature_u_profile[matching_feat_idx, :] = u[matching_time_idx, :]
             feature_v_profile[matching_feat_idx, :] = v[matching_time_idx, :]
-            feature_ccn_profile[matching_feat_idx, :] = ccn[matching_time_idx, :]
-
+            feature_ccn6_profile[matching_feat_idx, :] = ccn6[matching_time_idx, :]
+            feature_ccn4_profile[matching_feat_idx, :] = ccn4[matching_time_idx, :]
             feature_mlcape[matching_feat_idx] = mlcapes[matching_time_idx]
             feature_mlcin[matching_feat_idx] = mlcins[matching_time_idx]
             feature_mlecape[matching_feat_idx] = mlecapes[matching_time_idx]
@@ -760,7 +761,8 @@ def compute_sounding_stats(tfm):
         'feature_dew_profile' : (('feature', 'vertical_levels'), feature_dew_profile),
         'feature_u_profile' : (('feature', 'vertical_levels'), feature_u_profile),
         'feature_v_profile' : (('feature', 'vertical_levels'), feature_v_profile),
-        'feature_ccn_profile_0.6' : (('feature', 'vertical_levels'), feature_ccn_profile),
+        'feature_ccn_profile_0.6' : (('feature', 'vertical_levels'), feature_ccn6_profile),
+        'feature_ccn_profile_0.4' : (('feature', 'vertical_levels'), feature_ccn4_profile),
         'feature_mlcape' : (('feature',), feature_mlcape),
         'feature_mlcin' : (('feature',), feature_mlcin),
         'feature_mlecape' : (('feature',), feature_mlecape),
@@ -774,35 +776,27 @@ def compute_sounding_stats(tfm):
 
 def add_sfc_aerosol_data(tfm, ss_lower_bound=0.6, ss_upper_bound=0.8, ss_target=0.6):
     date_i_want = tfm.time.data[0].astype('datetime64[D]').astype(dt)
-    arm_ccn_path = '/Volumes/LtgSSD/arm-ccn-avg/'
-    arm_ccn_files = glob(arm_ccn_path+date_i_want.strftime('*%Y%m%d*.nc'))
+    arm_ccn_path = '/Volumes/LtgSSD/arm-ccn-fix/sam_pyrcel_out.csv'
     maritime_ccn = []
     maritime_times = []
     continental_ccn = []
     continental_times = []
-    if len(arm_ccn_files) == 1:
-        arm_ccn_file = arm_ccn_files[0]
-        arm_ccn = xr.open_dataset(arm_ccn_file)
-        arm_ccn_ccn = arm_ccn.N_CCN.data
-        arm_ccn_time = arm_ccn.time.data
-        readings_in_window = ((arm_ccn.supersaturation_calculated >= ss_lower_bound) & (arm_ccn.supersaturation_calculated <= ss_upper_bound))
-        arm_ccn_ccn_window = arm_ccn_ccn[readings_in_window]
-        arm_ccn_time_window = arm_ccn_time[readings_in_window]
-        arm_ccn_lon = np.full(arm_ccn_time_window.shape, arm_ccn.lon.data)
-        arm_ccn_lat = np.full(arm_ccn_time_window.shape, arm_ccn.lat.data)
-        arm_ccn_sbf = identify_side(arm_ccn_time_window.astype('datetime64[s]').astype(float), arm_ccn_lon, arm_ccn_lat, tfm.time.compute().data.astype('datetime64[s]').astype(float),
-                                            tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.compute().data, tfm.lat.compute().data)
-        
-        arm_ccn_maritime = arm_ccn_ccn_window[arm_ccn_sbf == -1]
-        arm_maritime_time = arm_ccn_time_window[arm_ccn_sbf == -1]
-        maritime_ccn.extend(arm_ccn_maritime.tolist())
-        maritime_times.extend(arm_maritime_time.tolist())
-        arm_ccn_continental = arm_ccn_ccn_window[arm_ccn_sbf == -2]
-        arm_continental_time = arm_ccn_time_window[arm_ccn_sbf == -2]
-        continental_ccn.extend(arm_ccn_continental.tolist())
-        continental_times.extend(arm_continental_time.tolist())
-    else:
-        print(f'Warning, {len(arm_ccn_files)} ARM CCN files found!')
+    arm_ccn = pd.read_csv(arm_ccn_path, parse_dates=['timestamp']).set_index('timestamp', drop=True)
+    arm_ccn = arm_ccn.loc[(arm_ccn.index >= tfm.time.data[0]) & (arm_ccn.index <= tfm.time.data[-1])]
+    arm_ccn_ccn = arm_ccn[f'{ss_target:.1f}SS'].values
+    arm_ccn_time = arm_ccn.index.values
+    arm_ccn_lon = np.full(arm_ccn_ccn.shape, -95.059)
+    arm_ccn_lat = np.full(arm_ccn_ccn.shape, 29.67)
+    arm_ccn_sbf = identify_side(arm_ccn_time.astype('datetime64[s]').astype(float), arm_ccn_lon, arm_ccn_lat, tfm.time.compute().data.astype('datetime64[s]').astype(float),
+                                        tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.compute().data, tfm.lat.compute().data)
+    arm_ccn_maritime = arm_ccn_ccn[arm_ccn_sbf == -1]
+    arm_maritime_time = arm_ccn_time[arm_ccn_sbf == -1]
+    maritime_ccn.extend(arm_ccn_maritime.tolist())
+    maritime_times.extend(arm_maritime_time.tolist())
+    arm_ccn_continental = arm_ccn_ccn[arm_ccn_sbf == -2]
+    arm_continental_time = arm_ccn_time[arm_ccn_sbf == -2]
+    continental_ccn.extend(arm_ccn_continental.tolist())
+    continental_times.extend(arm_continental_time.tolist())
     tamu_ccn_path = '/Volumes/LtgSSD/brooks-ccn/'
     tamu_ccn_files = glob(tamu_ccn_path+date_i_want.strftime('*%y%m%d_ccn*.csv'))
     if len(tamu_ccn_files) == 1:
@@ -1151,7 +1145,9 @@ def convert_to_track_time(tfmo):
     track_dewpoint_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
     track_u_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
     track_v_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
-    track_ccn_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
+    track_ccn6_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
+    track_ccn4_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
+
 
     track_mlcape = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
     track_mlcin = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
@@ -1165,7 +1161,7 @@ def convert_to_track_time(tfmo):
     vars_to_load_now = ['feature_time_index', 'feature_seabreeze', 'feature_area', 'feature_echotop', 'feature_flash_count', 'feature_flash_count_area_GT_4km',
                         'feature_flash_count_area_LE_4km', 'feature_kdpvol', 'feature_lat', 'feature_lon', 'feature_rhvdeficitvol', 'feature_zdrvol', 'feature_min_L2_MCMIPC',
                         'feature_pressure_profile', 'feature_msl_profile', 'feature_temp_profile', 'feature_dew_profile', 'feature_u_profile', 'feature_v_profile', 'feature_ccn_profile_0.6',
-                        'feature_mlcape', 'feature_mlcin', 'feature_mlecape', 'feature_lcl', 'feature_lfc', 'feature_el', 'feature_ccl']
+                        'feature_ccn_profile_0.4', 'feature_mlcape', 'feature_mlcin', 'feature_mlecape', 'feature_lcl', 'feature_lfc', 'feature_el', 'feature_ccl']
     for var in vars_to_load_now:
         tfmo[var] = tfmo[var].compute()
     features_with_parents = np.sort(np.where(tfmo.feature_parent_cell_id.compute().data != -1)[0])
@@ -1337,12 +1333,19 @@ def convert_to_track_time(tfmo):
 
 
         # Handle ccn profile (mean if already set)
-        this_feature_ccn_profile = tfmo['feature_ccn_profile_0.6'].data[feature_idx, :]
-        previously_set_ccn_profile = track_ccn_profile[parent_track, time_idx, :]
-        if np.all(np.isnan(previously_set_ccn_profile)):
-            track_ccn_profile[parent_track, time_idx, :] = this_feature_ccn_profile
-        elif not np.all(previously_set_ccn_profile == this_feature_ccn_profile):
-            track_ccn_profile[parent_track, time_idx, :] = np.nanmean([previously_set_ccn_profile, this_feature_ccn_profile], axis=0)
+        this_feature_ccn6_profile = tfmo['feature_ccn_profile_0.6'].data[feature_idx, :]
+        previously_set_ccn6_profile = track_ccn6_profile[parent_track, time_idx, :]
+        if np.all(np.isnan(previously_set_ccn6_profile)):
+            track_ccn6_profile[parent_track, time_idx, :] = this_feature_ccn6_profile
+        elif not np.all(previously_set_ccn6_profile == this_feature_ccn6_profile):
+            track_ccn6_profile[parent_track, time_idx, :] = np.nanmean([previously_set_ccn6_profile, this_feature_ccn6_profile], axis=0)
+
+        this_feature_ccn4_profile = tfmo['feature_ccn_profile_0.4'].data[feature_idx, :]
+        previously_set_ccn4_profile = track_ccn4_profile[parent_track, time_idx, :]
+        if np.all(np.isnan(previously_set_ccn4_profile)):
+            track_ccn4_profile[parent_track, time_idx, :] = this_feature_ccn4_profile
+        elif not np.all(previously_set_ccn4_profile == this_feature_ccn4_profile):
+            track_ccn4_profile[parent_track, time_idx, :] = np.nanmean([previously_set_ccn4_profile, this_feature_ccn4_profile], axis=0)
 
 
         # Handle mlcape (mean if already set)
@@ -1421,7 +1424,8 @@ def convert_to_track_time(tfmo):
         'track_dew_profile' : (('track', 'time', 'vertical_levels'), track_dewpoint_profile),
         'track_u_profile' : (('track', 'time', 'vertical_levels'), track_u_profile),
         'track_v_profile' : (('track', 'time', 'vertical_levels'), track_v_profile),
-        'track_ccn_profile_0.6' : (('track', 'time', 'vertical_levels'), track_ccn_profile),
+        'track_ccn_profile_0.6' : (('track', 'time', 'vertical_levels'), track_ccn6_profile),
+        'track_ccn_profile_0.4' : (('track', 'time', 'vertical_levels'), track_ccn4_profile),
         'track_mlcape' : (('track', 'time'), track_mlcape),
         'track_mlcin' : (('track', 'time'), track_mlcin),
         'track_mlecape' : (('track', 'time'), track_mlecape),
@@ -1465,7 +1469,8 @@ if __name__ == '__main__':
     tfm_seabreeze = add_seabreeze_to_features(tfm_ctt, client, should_debug=should_debug)
     tfm_w_profiles = add_radiosonde_data(tfm_seabreeze, should_debug=should_debug)
     tfm_w_sfc = add_madis_data(tfm_w_profiles, should_debug=should_debug, client=client)
-    tfm_w_aerosols = add_sfc_aerosol_data(tfm_w_sfc)
+    tfm_w_aerosols = add_sfc_aerosol_data(tfm_w_sfc, ss_lower_bound=0.6, ss_upper_bound=0.65, ss_target=0.6)
+    tfm_w_aerosols = add_sfc_aerosol_data(tfm_w_aerosols, ss_lower_bound=0.34, ss_upper_bound=0.4, ss_target=0.4)
     # Compute aircraft aerosol passes here
     tfm_sounding_stats = compute_sounding_stats(tfm_w_aerosols)
     tfm_w_parents = generate_seg_mask_cell_track(generate_seg_mask_cell_track(tfm_sounding_stats, convert_to='track'), convert_to='cell')
@@ -1475,6 +1480,8 @@ if __name__ == '__main__':
     final_out_path = tfm_path.replace('.zarr', '-obs.zarr')
     tfm_obs = tfm_obs.drop_vars(['feature_time_str'], errors='ignore')
     client.close()
+    if path.exists(final_out_path):
+        rmtree(final_out_path)
     try:
         for dv in tfm_obs.data_vars:
             if 'chunks' in tfm_obs[dv].encoding.keys():
