@@ -653,7 +653,8 @@ def compute_sounding_stats(tfm):
     feature_dew_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
     feature_u_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
     feature_v_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
-    feature_ccn_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
+    feature_ccn6_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
+    feature_ccn4_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
 
     feature_mlcape = np.zeros((tfm.feature.shape[0]))
     feature_mlcin = np.zeros((tfm.feature.shape[0]))
