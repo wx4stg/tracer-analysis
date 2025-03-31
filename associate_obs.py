@@ -431,6 +431,9 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
             obs_sounding_dataset[this_dv][time_idx, :][levels_to_copy_mask] = obs_sounding_dataset[this_dv][time_idx-1, :][levels_to_copy_mask]
             obs_sounding_dataset[this_dv][time_idx, :][~levels_to_copy_mask] = interp_sonde_data[this_dv].values
 
+    maritime_sounding_dataset = maritime_sounding_dataset.interp(time=tfm.time.data, kwargs={'fill_value' : 'extrapolate'})
+    continental_sounding_dataset = continental_sounding_dataset.interp(time=tfm.time.data, kwargs={'fill_value' : 'extrapolate'})
+
 
     maritime_before_first_sonde = maritime_sounding_dataset.time.data < maritime_sonde_dts.min()
     maritime_after_last_sonde = maritime_sounding_dataset.time.data > maritime_sonde_dts.max()
@@ -665,14 +668,6 @@ def compute_sounding_stats(tfm):
             u_i = u[i, :]
             v_i = v[i, :]
 
-            if np.any(pressure_i.m == -999.):
-                mlcapes[i] = np.nan
-                mlcins[i] = np.nan
-                mlecapes[i] = np.nan
-                lcls[i] = np.nan
-                lfcs[i] = np.nan
-                els[i] = np.nan
-                continue
             spc_hum = mpcalc.specific_humidity_from_dewpoint(pressure_i, dew_i)
             try:
                 mlcape, mlcin = mpcalc.mixed_layer_cape_cin(pressure_i, temp_i, dew_i)
@@ -688,6 +683,7 @@ def compute_sounding_stats(tfm):
                     mlecape = calc_ecape(height_i, pressure_i, temp_botch, spc_hum_botch, u_i, v_i, cape_type='mixed_layer')
                     mlcape, mlcin = mpcalc.mixed_layer_cape_cin(pressure_i, temp_botch, dew_botch)
                 except Exception:
+                    print(f'ecape calculation failed at time {tfm.time.data[i]}')
                     mlecape = 0 * units('J/kg')
                     mlcape = 0 * units('J/kg')
                     mlcin = 0 * units('J/kg')
