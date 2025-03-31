@@ -320,7 +320,6 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
         CMAS_sonde_lats = np.empty(0, dtype=float)
 
     # Load ACARS profiles
-    acars_all_list = []
     airports_i_want = {'IAH' : {'latitude' : 29.9844353, 'longitude' : -95.3414425},
                     'HOU' : {'latitude' : 29.6457998, 'longitude' : -95.2772316},
                     'LBX' : {'latitude' : 29.1086389, 'longitude' : -95.4620833},
@@ -332,72 +331,68 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
                     'CXO' : {'latitude' : 30.3533955, 'longitude' : -95.4150819},
                     'HPY' : {'latitude' : 29.7860833, 'longitude' : -94.9526667}
                     }
-    for hour_to_pull in range(24):
-        acars_conn = spy.acars_data(str(date_i_want.year).zfill(4), str(date_i_want.month).zfill(2), str(date_i_want.day).zfill(2), str(hour_to_pull).zfill(2))
-        try:
-            this_hour_acars_list = [prof for prof in acars_conn.list_profiles() if prof[:3] in airports_i_want.keys()]
-        except Exception as e:
-            if 'HTTP Error' in str(e):
-                continue
-            else:
-                raise e
-        acars_all_list.extend(this_hour_acars_list)
-    acars_profile_dts = []
-    acars_profile_lons = []
-    acars_profile_lats = []
-    acars_profile_files = []
-    for acars_loctime in acars_all_list:
-        acars_profile_dts.append(date_i_want.replace(hour=int(acars_loctime[-4:-2]), minute=int(acars_loctime[-2:])))
-        acars_profile_lats.append(airports_i_want[acars_loctime[:3]]['latitude'])
-        acars_profile_lons.append(airports_i_want[acars_loctime[:3]]['longitude'])
-        acars_profile_files.append('ACARS+'+acars_loctime)
-    acars_profile_dts = np.array(acars_profile_dts).astype('datetime64[s]')
+
+
+    acars_profile_files = glob(f'/Volumes/LtgSSD/acars-sondes/*_{date_i_want.strftime("%Y%m%d")}_*.csv')
+    acars_profile_dts = np.array([dt.strptime(f'{date_i_want.strftime("%Y%m%d")}_{f.split("_")[-1].replace(".csv", "")}', '%Y%m%d_%H%M') for f in acars_profile_files]).astype('datetime64[s]')
+    acars_profile_lons = np.array([airports_i_want[path.basename(f)[0:3]]['longitude'] for f in acars_profile_files])
+    acars_profile_lats = np.array([airports_i_want[path.basename(f)[0:3]]['latitude'] for f in acars_profile_files])
     acars_profile_sbf = identify_side(acars_profile_dts.astype(float), np.array(acars_profile_lons), np.array(acars_profile_lats), tfm.time.compute().data.astype('datetime64[s]').astype(float),
-                                        tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.compute().data, tfm.lat.compute().data)
-    all_sonde_files = np.concatenate([arm_sonde_files_this_day, tamu_sonde_files_this_day, CMAS_sonde_files_this_day, acars_profile_files])
+                                    tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.compute().data, tfm.lat.compute().data)
+
     all_sonde_dts = np.concatenate([arm_sonde_dts_this_day, tamu_sonde_dts_this_day, CMAS_sonde_dts_this_day, acars_profile_dts])
-    all_sonde_sbf_side = np.concatenate([arm_sonde_sbf_side, tamu_sonde_sbf_side, CMAS_sonde_sbf_side, acars_profile_sbf])
-    all_sonde_lons = np.concatenate([arm_sonde_lons, tamu_sonde_lons, CMAS_sonde_lons, acars_profile_lons])
-    all_sonde_lats = np.concatenate([arm_sonde_lats, tamu_sonde_lats, CMAS_sonde_lats, acars_profile_lats])
+    sonde_sorting = np.argsort(all_sonde_dts)
+    all_sonde_dts = all_sonde_dts[sonde_sorting]
+    for i, this_dt in enumerate(all_sonde_dts[1:]):
+        if this_dt == all_sonde_dts[i]:
+            all_sonde_dts[i] = this_dt - np.timedelta64(1, 's')
+    all_sonde_dts = all_sonde_dts.astype('datetime64[ns]')
+    all_sonde_files = np.concatenate([arm_sonde_files_this_day, tamu_sonde_files_this_day, CMAS_sonde_files_this_day, acars_profile_files])[sonde_sorting]
+    all_sonde_sbf_side = np.concatenate([arm_sonde_sbf_side, tamu_sonde_sbf_side, CMAS_sonde_sbf_side, acars_profile_sbf])[sonde_sorting]
+    all_sonde_lons = np.concatenate([arm_sonde_lons, tamu_sonde_lons, CMAS_sonde_lons, acars_profile_lons])[sonde_sorting]
+    all_sonde_lats = np.concatenate([arm_sonde_lats, tamu_sonde_lats, CMAS_sonde_lats, acars_profile_lats])[sonde_sorting]
 
     maritime_sonde_dts = all_sonde_dts[all_sonde_sbf_side == -1]
-    maritime_sorting = np.argsort(maritime_sonde_dts)
-    maritime_sonde_dts = maritime_sonde_dts[maritime_sorting]
+    maritime_sonde_files = all_sonde_files[all_sonde_sbf_side == -1]
+    maritime_sonde_lons = all_sonde_lons[all_sonde_sbf_side == -1]
+    maritime_sonde_lats = all_sonde_lats[all_sonde_sbf_side == -1]
 
     continental_sonde_dts = all_sonde_dts[all_sonde_sbf_side == -2]
-    continental_sorting = np.argsort(continental_sonde_dts)
-    continental_sonde_dts = continental_sonde_dts[continental_sorting]
+    continental_sonde_files = all_sonde_files[all_sonde_sbf_side == -2]
+    continental_sonde_lons = all_sonde_lons[all_sonde_sbf_side == -2]
+    continental_sonde_lats = all_sonde_lats[all_sonde_sbf_side == -2]
 
-    n_sounding_vars = 6 # pressure, temperature, dewpoint, u, v, z
-    maritime_representative_profile = np.full((tfm.time.shape[0], n_sounding_levels, n_sounding_vars), -999, dtype=float)
-    last_maritime_profile_time_index = -1
+    continental_sounding_dataset = xr.Dataset(coords={'time' : continental_sonde_dts, 'vertical_levels' : np.arange(n_sounding_levels)},
+                                data_vars={
+                                    'pres' : (['time', 'vertical_levels'], np.full((continental_sonde_dts.shape[0], n_sounding_levels), np.nan)),
+                                    'tdry' : (['time', 'vertical_levels'], np.full((continental_sonde_dts.shape[0], n_sounding_levels), np.nan)),
+                                    'dp' : (['time', 'vertical_levels'], np.full((continental_sonde_dts.shape[0], n_sounding_levels), np.nan)),
+                                    'u_wind' : (['time', 'vertical_levels'], np.full((continental_sonde_dts.shape[0], n_sounding_levels), np.nan)),
+                                    'v_wind' : (['time', 'vertical_levels'], np.full((continental_sonde_dts.shape[0], n_sounding_levels), np.nan)),
+                                    'alt' : (['time', 'vertical_levels'], np.full((continental_sonde_dts.shape[0], n_sounding_levels), np.nan)),
+                                    'lon' : (['time'], continental_sonde_lons),
+                                    'lat' : (['time'], continental_sonde_lats),
+                                    'filename' : (['time'], [path.basename(f) for f in continental_sonde_files])
+                                    })
 
-    continental_representative_profile = np.full((tfm.time.shape[0], n_sounding_levels, n_sounding_vars), -999, dtype=float)
-    last_continental_profile_time_index = -1
+    maritime_sounding_dataset = xr.Dataset(coords={'time' : maritime_sonde_dts, 'vertical_levels' : np.arange(n_sounding_levels)},
+                                data_vars={
+                                    'pres' : (['time', 'vertical_levels'], np.full((maritime_sonde_dts.shape[0], n_sounding_levels), np.nan)),
+                                    'tdry' : (['time', 'vertical_levels'], np.full((maritime_sonde_dts.shape[0], n_sounding_levels), np.nan)),
+                                    'dp' : (['time', 'vertical_levels'], np.full((maritime_sonde_dts.shape[0], n_sounding_levels), np.nan)),
+                                    'u_wind' : (['time', 'vertical_levels'], np.full((maritime_sonde_dts.shape[0], n_sounding_levels), np.nan)),
+                                    'v_wind' : (['time', 'vertical_levels'], np.full((maritime_sonde_dts.shape[0], n_sounding_levels), np.nan)),
+                                    'alt' : (['time', 'vertical_levels'], np.full((maritime_sonde_dts.shape[0], n_sounding_levels), np.nan)),
+                                    'lon' : (['time'], maritime_sonde_lons),
+                                    'lat' : (['time'], maritime_sonde_lats),
+                                    'filename' : (['time'], [path.basename(f) for f in maritime_sonde_files])
+                                    })
 
-    for f, this_dt, sbf, this_lon, this_lat in zip(all_sonde_files, all_sonde_dts, all_sonde_sbf_side, all_sonde_lons, all_sonde_lats):
-        this_pydt = this_dt.astype(dt)
-        if f.startswith('ACARS'):
-            with warnings.catch_warnings():
-                warnings.filterwarnings('ignore')
-                acars_conn = spy.acars_data(str(this_pydt.year).zfill(4), str(this_pydt.month).zfill(2), str(this_pydt.day).zfill(2), str(this_pydt.hour).zfill(2))
-                try:
-                    sounding = acars_conn.get_profile(f.replace('ACARS+', ''), hush=True, clean_it=True)
-                except Exception as e:
-                    if 'HTTP Error' in str(e):
-                        continue
-                    else:
-                        raise e
-            this_sonde_data = pd.DataFrame(
-                {'pres' : sounding['p'].to('hPa').m,
-                'tdry' : sounding['T'].to('degC').m,
-                'dp' : sounding['Td'].to('degC').m,
-                'u_wind' : sounding['u'].to('m/s').m,
-                'v_wind' : sounding['v'].to('m/s').m,
-                'alt' : sounding['z'].to('m').m}
-            )
+    for f, this_dt, sbf in zip(all_sonde_files, all_sonde_dts, all_sonde_sbf_side):
+        if f.endswith('csv'):
+            this_sonde_data = pd.read_csv(f)
         elif f.endswith('.cdf'):
-            this_sonde_data = xr.open_dataset(f)
+            this_sonde_data = xr.open_dataset(f).to_dataframe().reset_index(drop=True)
         elif f.endswith('.nc'):
             this_sonde_data = xr.open_dataset(f)
             this_sonde_data['pres'] = this_sonde_data.pressure
@@ -407,86 +402,63 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
             this_sonde_data['u_wind'] = u
             this_sonde_data['v_wind'] = v
             this_sonde_data['alt'] = this_sonde_data.geometric_height
-        else:
+            this_sonde_data = this_sonde_data.to_dataframe().reset_index(drop=True)
+        elif f.endswith('.txt'):
             this_sonde_data = pd.read_csv(f, skiprows=28, encoding='latin1', sep='\\s+', names=[
                 'FlightTime', 'pres', 'tdry', 'RH', 'WindSpeed', 'WindDirection', 'AGL', 'AGL2', 'alt', 'Longitude', 'Latitude', 'y', 'x', 'Tv', 'dp', 'rho',
                 'e', 'v_wind', 'u_wind', 'range', 'rv', 'MSL2', 'UTC_DAY', 'UTC_TIME', 'UTC_AMPM', 'ELAPSED_TIME', 'ELAPSED_TIME2', 'ELAPSED_TIME3', 'FrostPoint']
                 )
-        if len(this_sonde_data.pres.values) < 2:
-            continue
-
-        if should_debug:
-            save_path = f'./debug-figs-{this_pydt.strftime("%Y%m%d")}/profiles/{this_pydt.strftime("%Y%m%d_%H%M")}.png'
-            plot_radiosonde_data(this_sonde_data, this_pydt, this_lon, this_lat, sbf, tfm, save_path)
-
-
-        otp_check = np.array([-999])
+            
         if sbf == -1:
-            otp_check = maritime_representative_profile[last_maritime_profile_time_index, :, 0].copy()
+            obs_sounding_dataset = maritime_sounding_dataset
         elif sbf == -2:
-            otp_check = continental_representative_profile[last_continental_profile_time_index, :, 0].copy()
-        otp_check[otp_check == -999] = np.nan
-        old_top_pressure = np.nanmin(otp_check)
-        new_top_pressure = np.min(this_sonde_data.pres.values)
-        if np.isnan(old_top_pressure):
-            n_levels_to_replace = n_sounding_levels
+            obs_sounding_dataset = continental_sounding_dataset
+        time_idx = np.nonzero(obs_sounding_dataset.time.data == this_dt)[0][0]
+        if time_idx > 0:
+            levels_to_copy_mask = np.nanmin(this_sonde_data['pres'].values) > obs_sounding_dataset['pres'].data[time_idx-1, :]
+            nlevels_to_interp = n_sounding_levels - levels_to_copy_mask.sum()
         else:
-            if old_top_pressure < new_top_pressure:
-                n_levels_to_replace = otp_check[otp_check > new_top_pressure].shape[0]
-            else:
-                n_levels_to_replace = n_sounding_levels
+            nlevels_to_interp = n_sounding_levels
+            levels_to_copy_mask = np.full(nlevels_to_interp, False)
+        this_sonde_data = this_sonde_data.sort_values('pres', ascending=False)
+        this_sonde_data = this_sonde_data[['pres', 'tdry', 'dp', 'u_wind', 'v_wind', 'alt']].dropna(how='any').reset_index(drop=True)
+        new_pres = np.linspace(np.max(this_sonde_data['pres'].values), np.min(this_sonde_data['pres'].values), nlevels_to_interp)
+        new_t, new_dp, new_u, new_v, new_z = interpolate_1d(new_pres, this_sonde_data['pres'].values, this_sonde_data['tdry'].values,
+                            this_sonde_data['dp'].values, this_sonde_data['u_wind'].values, this_sonde_data['v_wind'].values,
+                            this_sonde_data['alt'].values)
+        interp_sonde_data = pd.DataFrame({'pres' : new_pres, 'tdry' : new_t, 'dp' : new_dp, 'u_wind' : new_u, 'v_wind' : new_v, 'alt' : new_z}).interpolate(method='linear')
+        for this_dv in ['pres', 'tdry', 'dp', 'u_wind', 'v_wind', 'alt']:
+            obs_sounding_dataset[this_dv][time_idx, :][levels_to_copy_mask] = obs_sounding_dataset[this_dv][time_idx-1, :][levels_to_copy_mask]
+            obs_sounding_dataset[this_dv][time_idx, :][~levels_to_copy_mask] = interp_sonde_data[this_dv].values
 
-        new_pres = np.linspace(np.max(this_sonde_data.pres.values), new_top_pressure, n_levels_to_replace)
-        new_t, new_dp, new_u, new_v, new_z = interpolate_1d(new_pres, this_sonde_data.pres.values, this_sonde_data.tdry.values,
-                                this_sonde_data.dp.values, this_sonde_data.u_wind.values, this_sonde_data.v_wind.values,
-                                this_sonde_data.alt.values)
-        if n_levels_to_replace < n_sounding_levels:
-            if sbf == -1:
-                this_rep_profile = maritime_representative_profile[last_maritime_profile_time_index, :, :].copy()
-                this_rep_profile[0:n_levels_to_replace, :] = np.vstack([new_pres, new_t, new_dp, new_u, new_v, new_z]).T
-            else:
-                this_rep_profile = continental_representative_profile[last_continental_profile_time_index, :, :].copy()
-                this_rep_profile[0:n_levels_to_replace, :] = np.vstack([new_pres, new_t, new_dp, new_u, new_v, new_z]).T
-        else:
-            this_rep_profile = np.vstack([new_pres, new_t, new_dp, new_u, new_v, new_z]).T
 
-        closest_time_index = np.argmin(np.abs(tfm.time.data - this_dt))
-        if sbf == -1:
-            # This is a maritime sounding
-            maritime_representative_profile[closest_time_index, :, :] = this_rep_profile
-            if last_maritime_profile_time_index != -1:
-                maritime_representative_profile[last_maritime_profile_time_index+1:closest_time_index, :, :] = interp_sounding_times(tfm.time.data, last_maritime_profile_time_index, closest_time_index, maritime_representative_profile)
-            else:
-                maritime_representative_profile[0:closest_time_index, :, :] = this_rep_profile
-            last_maritime_profile_time_index = closest_time_index
-        elif sbf == -2:
-            # This is a continental sounding
-            continental_representative_profile[closest_time_index, :, :] = this_rep_profile
-            if last_continental_profile_time_index != -1:
-                continental_representative_profile[last_continental_profile_time_index+1:closest_time_index, :, :] = interp_sounding_times(tfm.time.data, last_continental_profile_time_index, closest_time_index, continental_representative_profile)
-            else:
-                last_continental_profile_time_index = closest_time_index
-                continental_representative_profile[0:closest_time_index, :, :] = this_rep_profile
-            last_continental_profile_time_index = closest_time_index
-        
-    continental_representative_profile[last_continental_profile_time_index+1:, :, :] = continental_representative_profile[last_continental_profile_time_index, :, :]
-    maritime_representative_profile[last_maritime_profile_time_index+1:, :, :] = maritime_representative_profile[last_maritime_profile_time_index, :, :]
+    maritime_before_first_sonde = maritime_sounding_dataset.time.data < maritime_sonde_dts.min()
+    maritime_after_last_sonde = maritime_sounding_dataset.time.data > maritime_sonde_dts.max()
 
-    new_maritime_vars = {'maritime_pressure_profile' : (('time', 'vertical_levels'), maritime_representative_profile[:, :, 0]),
-        'maritime_temperature_profile' : (('time', 'vertical_levels'), maritime_representative_profile[:, :, 1]),
-        'maritime_dewpoint_profile' : (('time', 'vertical_levels'), maritime_representative_profile[:, :, 2]),
-        'maritime_u_profile' : (('time', 'vertical_levels'), maritime_representative_profile[:, :, 3]),
-        'maritime_v_profile' : (('time', 'vertical_levels'), maritime_representative_profile[:, :, 4]),
-        'maritime_msl_profile' : (('time', 'vertical_levels'), maritime_representative_profile[:, :, 5])
+    continental_before_first_sonde = continental_sounding_dataset.time.data < continental_sonde_dts.min()
+    continental_after_last_sonde = continental_sounding_dataset.time.data > continental_sonde_dts.max()
+    for this_dv in ['pres', 'tdry', 'dp', 'u_wind', 'v_wind', 'alt']:
+        maritime_sounding_dataset[this_dv][maritime_before_first_sonde, :] = maritime_sounding_dataset[this_dv][maritime_before_first_sonde.sum(), :]
+        maritime_sounding_dataset[this_dv][maritime_after_last_sonde, :] = maritime_sounding_dataset[this_dv][-(maritime_after_last_sonde.sum()+1), :]
+
+        continental_sounding_dataset[this_dv][continental_before_first_sonde, :] = continental_sounding_dataset[this_dv][continental_before_first_sonde.sum(), :]
+        continental_sounding_dataset[this_dv][continental_after_last_sonde, :] = continental_sounding_dataset[this_dv][-(continental_after_last_sonde.sum()+1), :]
+    
+    new_maritime_vars = {'maritime_pressure_profile' : maritime_sounding_dataset.pres,
+        'maritime_temperature_profile' : maritime_sounding_dataset.tdry,
+        'maritime_dewpoint_profile' : maritime_sounding_dataset.dp,
+        'maritime_u_profile' : maritime_sounding_dataset.u_wind,
+        'maritime_v_profile' : maritime_sounding_dataset.v_wind,
+        'maritime_msl_profile' : maritime_sounding_dataset.alt
         }
 
     new_continental_vars = {
-            'continental_pressure_profile' : (('time', 'vertical_levels'), continental_representative_profile[:, :, 0]),
-            'continental_temperature_profile' : (('time', 'vertical_levels'), continental_representative_profile[:, :, 1]),
-            'continental_dewpoint_profile' : (('time', 'vertical_levels'), continental_representative_profile[:, :, 2]),
-            'continental_u_profile' : (('time', 'vertical_levels'), continental_representative_profile[:, :, 3]),
-            'continental_v_profile' : (('time', 'vertical_levels'), continental_representative_profile[:, :, 4]),
-            'continental_msl_profile' : (('time', 'vertical_levels'), continental_representative_profile[:, :, 5])
+            'continental_pressure_profile' : continental_sounding_dataset.pres,
+            'continental_temperature_profile' : continental_sounding_dataset.tdry,
+            'continental_dewpoint_profile' : continental_sounding_dataset.dp,
+            'continental_u_profile' : continental_sounding_dataset.u_wind,
+            'continental_v_profile' : continental_sounding_dataset.v_wind,
+            'continental_msl_profile' : continental_sounding_dataset.alt
         }
 
     tfm_w_profiles = tfm.copy().assign_coords(vertical_levels=np.arange(n_sounding_levels)).assign(new_maritime_vars).assign(new_continental_vars)
