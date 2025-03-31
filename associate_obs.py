@@ -15,7 +15,6 @@ from metpy.units import units
 from metpy import calc as mpcalc
 from metpy.plots import USCOUNTIES, SkewT
 from ecape.calc import calc_ecape
-import sounderpy as spy
 from scipy.interpolate import interp1d
 from scipy.io import loadmat
 import sys
@@ -181,8 +180,8 @@ def below_cloud_processing(tfm, date_i_want):
         nrc_below_cloud.to_netcdf(f'/Volumes/LtgSSD/analysis/below_cloud/{date_i_want.strftime("%Y%m%d")}_nrc_below_cloud.nc')
 
 
-def plot_radiosonde_data(this_sonde_data, this_pydt, this_lon, this_lat, sbf, tfm, save_path):
-    if not path.exists(save_path):
+def plot_radiosonde_data(this_sonde_data, this_pydt, this_lon=None, this_lat=None, sbf=None, tfm=None, save_path=None):
+    if save_path is None or not path.exists(save_path):
         mpluse('Agg')
         p = this_sonde_data['pres'].values
         T = this_sonde_data['tdry'].values
@@ -214,7 +213,10 @@ def plot_radiosonde_data(this_sonde_data, this_pydt, this_lon, this_lat, sbf, tf
             ax.add_feature(cfeat.STATES.with_scale('50m'))
             ax.add_feature(USCOUNTIES.with_scale('5m'))
         fig.tight_layout()
-        fig.savefig(save_path)
+        if save_path is not None:
+            fig.savefig(save_path)
+        else:
+            return fig
 
 
 def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
