@@ -154,7 +154,7 @@ plt.ylim([.1, 3000])
 plt.xlabel("sc (%)")
 plt.ylabel("CCN Number (cm⁻³)")
 plt.grid(which="both", linestyle="--", linewidth=0.5)
-
+plt.legend()
 # Save the combined plot to a file
 plt.tight_layout()
 plt.savefig("testparcel.png")
