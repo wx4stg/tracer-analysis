@@ -168,7 +168,10 @@ def below_cloud_processing(tfm, date_i_want):
 
         spec_ds = identify_aircraft_below_feature(spec_ds, tfm)
         spec_below_cloud = spec_ds.isel(time=spec_ds['below_feature'].data)
-        spec_below_cloud.to_netcdf(f'/Volumes/LtgSSD/analysis/below_cloud/{date_i_want.strftime("%Y%m%d")}_spec_below_cloud.nc')
+        try:
+            spec_below_cloud.to_netcdf(f'/Volumes/LtgSSD/analysis/below_cloud/{date_i_want.strftime("%Y%m%d")}_spec_below_cloud.nc')
+        except RuntimeError:
+            spec_below_cloud.to_zarr(f'/Volumes/LtgSSD/analysis/below_cloud/{date_i_want.strftime("%Y%m%d")}_spec_below_cloud.zarr')
 
 
 
@@ -177,7 +180,10 @@ def below_cloud_processing(tfm, date_i_want):
         nrc_ds = xr.open_mfdataset(nrc_flights).load().isel(sps1=0)
         nrc_ds = identify_aircraft_below_feature(nrc_ds, tfm)
         nrc_below_cloud = nrc_ds.isel(time=nrc_ds['below_feature'].data)
-        nrc_below_cloud.to_netcdf(f'/Volumes/LtgSSD/analysis/below_cloud/{date_i_want.strftime("%Y%m%d")}_nrc_below_cloud.nc')
+        try:
+            nrc_below_cloud.to_netcdf(f'/Volumes/LtgSSD/analysis/below_cloud/{date_i_want.strftime("%Y%m%d")}_nrc_below_cloud.nc')
+        except RuntimeError:
+            nrc_below_cloud.to_zarr(f'/Volumes/LtgSSD/analysis/below_cloud/{date_i_want.strftime("%Y%m%d")}_nrc_below_cloud.zarr')
 
 
 def plot_radiosonde_data(this_sonde_data, this_pydt, this_lon=None, this_lat=None, sbf=None, tfm=None, save_path=None):
