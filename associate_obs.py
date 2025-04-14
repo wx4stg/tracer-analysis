@@ -348,24 +348,24 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
     all_sonde_dts = np.concatenate([arm_sonde_dts_this_day, tamu_sonde_dts_this_day, CMAS_sonde_dts_this_day, acars_profile_dts])
     sonde_sorting = np.argsort(all_sonde_dts)
     all_sonde_dts = all_sonde_dts[sonde_sorting]
-    for i, this_dt in enumerate(all_sonde_dts[1:]):
-        if this_dt == all_sonde_dts[i]:
-            all_sonde_dts[i] = this_dt - np.timedelta64(1, 's')
     all_sonde_dts = all_sonde_dts.astype('datetime64[ns]')
     all_sonde_files = np.concatenate([arm_sonde_files_this_day, tamu_sonde_files_this_day, CMAS_sonde_files_this_day, acars_profile_files])[sonde_sorting]
     all_sonde_sbf_side = np.concatenate([arm_sonde_sbf_side, tamu_sonde_sbf_side, CMAS_sonde_sbf_side, acars_profile_sbf])[sonde_sorting]
     all_sonde_lons = np.concatenate([arm_sonde_lons, tamu_sonde_lons, CMAS_sonde_lons, acars_profile_lons])[sonde_sorting]
     all_sonde_lats = np.concatenate([arm_sonde_lats, tamu_sonde_lats, CMAS_sonde_lats, acars_profile_lats])[sonde_sorting]
+    orig_time_indices = np.arange(all_sonde_dts.shape[0])
 
     maritime_sonde_dts = all_sonde_dts[all_sonde_sbf_side == -1]
     maritime_sonde_files = all_sonde_files[all_sonde_sbf_side == -1]
     maritime_sonde_lons = all_sonde_lons[all_sonde_sbf_side == -1]
     maritime_sonde_lats = all_sonde_lats[all_sonde_sbf_side == -1]
+    maritime_time_indices = orig_time_indices[all_sonde_sbf_side == -1]
 
     continental_sonde_dts = all_sonde_dts[all_sonde_sbf_side == -2]
     continental_sonde_files = all_sonde_files[all_sonde_sbf_side == -2]
     continental_sonde_lons = all_sonde_lons[all_sonde_sbf_side == -2]
     continental_sonde_lats = all_sonde_lats[all_sonde_sbf_side == -2]
+    continental_time_indices = orig_time_indices[all_sonde_sbf_side == -2]
 
     continental_sounding_dataset = xr.Dataset(coords={'time' : continental_sonde_dts, 'vertical_levels' : np.arange(n_sounding_levels)},
                                 data_vars={
@@ -393,7 +393,7 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
                                     'filename' : (['time'], [path.basename(f) for f in maritime_sonde_files])
                                     })
 
-    for f, this_dt, sbf in zip(all_sonde_files, all_sonde_dts, all_sonde_sbf_side):
+    for this_itr, (f, this_dt, sbf) in enumerate(zip(all_sonde_files, all_sonde_dts, all_sonde_sbf_side)):
         if f.endswith('csv'):
             this_sonde_data = pd.read_csv(f)
         elif f.endswith('.cdf'):
@@ -416,9 +416,10 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
             
         if sbf == -1:
             obs_sounding_dataset = maritime_sounding_dataset
+            time_idx = np.argwhere(maritime_time_indices == this_itr)[0][0]
         elif sbf == -2:
             obs_sounding_dataset = continental_sounding_dataset
-        time_idx = np.nonzero(obs_sounding_dataset.time.data == this_dt)[0][0]
+            time_idx = np.argwhere(continental_time_indices == this_itr)[0][0]
         if time_idx > 0:
             levels_to_copy_mask = np.nanmin(this_sonde_data['pres'].values) > obs_sounding_dataset['pres'].data[time_idx-1, :]
             nlevels_to_interp = n_sounding_levels - levels_to_copy_mask.sum()
@@ -436,8 +437,14 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
             obs_sounding_dataset[this_dv][time_idx, :][levels_to_copy_mask] = obs_sounding_dataset[this_dv][time_idx-1, :][levels_to_copy_mask]
             obs_sounding_dataset[this_dv][time_idx, :][~levels_to_copy_mask] = interp_sonde_data[this_dv].values
 
-    maritime_sounding_dataset = maritime_sounding_dataset.interp(time=tfm.time.data, kwargs={'fill_value' : 'extrapolate'})
-    continental_sounding_dataset = continental_sounding_dataset.interp(time=tfm.time.data, kwargs={'fill_value' : 'extrapolate'})
+    maritime_sounding_dataset = maritime_sounding_dataset.sortby('time')
+    maritime_sounding_dataset_unique = maritime_sounding_dataset.groupby('time').mean(dim='time', skipna=True)
+    maritime_sounding_dataset_unique.attrs = maritime_sounding_dataset.attrs
+    maritime_sounding_dataset = maritime_sounding_dataset_unique.interp(time=tfm.time.data, kwargs={'fill_value' : 'extrapolate'})
+    continental_sounding_dataset_unique = continental_sounding_dataset.groupby('time').mean(dim='time', skipna=True)
+    continental_sounding_dataset_unique.attrs = continental_sounding_dataset.attrs
+    continental_sounding_dataset = continental_sounding_dataset_unique.interp(time=tfm.time.data, kwargs={'fill_value' : 'extrapolate'})
+
 
 
     maritime_before_first_sonde = maritime_sounding_dataset.time.data < maritime_sonde_dts.min()
