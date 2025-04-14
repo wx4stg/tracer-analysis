@@ -281,7 +281,6 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
                                                     tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.compute().data, tfm.lat.compute().data)
         
     else:
-        print('Warning, no TAMU sondes found!')
         tamu_sonde_files_this_day = np.empty(0, dtype=str)
         tamu_sonde_dts_this_day = np.empty(0, dtype='datetime64[s]')
         tamu_sonde_sbf_side = np.empty(0, dtype=int)
@@ -747,27 +746,28 @@ def compute_sounding_stats(tfm):
 
 def add_sfc_aerosol_data(tfm, ss_lower_bound=0.6, ss_upper_bound=0.8, ss_target=0.6):
     date_i_want = tfm.time.data[0].astype('datetime64[D]').astype(dt)
-    arm_ccn_path = '/Volumes/LtgSSD/arm-ccn-fix/sam_pyrcel_out.csv'
     maritime_ccn = []
     maritime_times = []
     continental_ccn = []
     continental_times = []
-    arm_ccn = pd.read_csv(arm_ccn_path, parse_dates=['timestamp']).set_index('timestamp', drop=True)
-    arm_ccn = arm_ccn.loc[(arm_ccn.index >= tfm.time.data[0]) & (arm_ccn.index <= tfm.time.data[-1])]
-    arm_ccn_ccn = arm_ccn[f'{ss_target:.1f}SS'].values
-    arm_ccn_time = arm_ccn.index.values
-    arm_ccn_lon = np.full(arm_ccn_ccn.shape, -95.059)
-    arm_ccn_lat = np.full(arm_ccn_ccn.shape, 29.67)
-    arm_ccn_sbf = identify_side(arm_ccn_time.astype('datetime64[s]').astype(float), arm_ccn_lon, arm_ccn_lat, tfm.time.compute().data.astype('datetime64[s]').astype(float),
-                                        tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.compute().data, tfm.lat.compute().data)
-    arm_ccn_maritime = arm_ccn_ccn[arm_ccn_sbf == -1]
-    arm_maritime_time = arm_ccn_time[arm_ccn_sbf == -1]
-    maritime_ccn.extend(arm_ccn_maritime.tolist())
-    maritime_times.extend(arm_maritime_time.tolist())
-    arm_ccn_continental = arm_ccn_ccn[arm_ccn_sbf == -2]
-    arm_continental_time = arm_ccn_time[arm_ccn_sbf == -2]
-    continental_ccn.extend(arm_ccn_continental.tolist())
-    continental_times.extend(arm_continental_time.tolist())
+    arm_ccn_path = '/Volumes/LtgSSD/arm-ccn-fix/sam_pyrcel_out.csv'
+    if path.exists(arm_ccn_path):
+        arm_ccn = pd.read_csv(arm_ccn_path, parse_dates=['timestamp']).set_index('timestamp', drop=True)
+        arm_ccn = arm_ccn.loc[(arm_ccn.index >= tfm.time.data[0]) & (arm_ccn.index <= tfm.time.data[-1])]
+        arm_ccn_ccn = arm_ccn[f'{ss_target:.1f}SS'].values
+        arm_ccn_time = arm_ccn.index.values
+        arm_ccn_lon = np.full(arm_ccn_ccn.shape, -95.059)
+        arm_ccn_lat = np.full(arm_ccn_ccn.shape, 29.67)
+        arm_ccn_sbf = identify_side(arm_ccn_time.astype('datetime64[s]').astype(float), arm_ccn_lon, arm_ccn_lat, tfm.time.compute().data.astype('datetime64[s]').astype(float),
+                                            tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.compute().data, tfm.lat.compute().data)
+        arm_ccn_maritime = arm_ccn_ccn[arm_ccn_sbf == -1]
+        arm_maritime_time = arm_ccn_time[arm_ccn_sbf == -1]
+        maritime_ccn.extend(arm_ccn_maritime.tolist())
+        maritime_times.extend(arm_maritime_time.tolist())
+        arm_ccn_continental = arm_ccn_ccn[arm_ccn_sbf == -2]
+        arm_continental_time = arm_ccn_time[arm_ccn_sbf == -2]
+        continental_ccn.extend(arm_ccn_continental.tolist())
+        continental_times.extend(arm_continental_time.tolist())
     tamu_ccn_path = '/Volumes/LtgSSD/brooks-ccn/'
     tamu_ccn_files = glob(tamu_ccn_path+date_i_want.strftime('*%y%m%d_ccn*.csv'))
     if len(tamu_ccn_files) == 1:
@@ -788,8 +788,6 @@ def add_sfc_aerosol_data(tfm, ss_lower_bound=0.6, ss_upper_bound=0.8, ss_target=
         tamu_continental_time = tamu_times_window[tamu_ccn_sbf == -2]
         continental_ccn.extend(tamu_ccn_continental.tolist())
         continental_times.extend(tamu_continental_time.tolist())
-    else:
-        print(f'Warning, {len(tamu_ccn_files)} TAMU CCN files found!')
     guy_ccn_path = '/Volumes/LtgSSD/guy-ccn/CCN_20220702to20220910_TRACER_IOP.mat'
     guy_ccn = loadmat(guy_ccn_path)
     varnames = guy_ccn['CCN'][0][0].dtype.names
