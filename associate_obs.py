@@ -593,7 +593,9 @@ def add_madis_data(tfm, should_debug=False, client=None):
     madis_ds_lat = madis_ds_lat.compute()
     madis_ds_lon[madis_ds_invalid] = np.nan
     madis_ds_lon = madis_ds_lon.compute()
-    polyline = gpd.read_file(f'/Volumes/LtgSSD/analysis/sam_polyline/{date_i_want.strftime("%Y-%m-%d")}_interpolated.json').set_index('index')
+    polyline = gpd.read_file(f'/Volumes/LtgSSD/analysis/sam_polyline/{date_i_want.strftime("%Y-%m-%d")}_interpolated.json')
+    polyline['index'] = polyline['index'].values.astype('datetime64[s]').astype(float)
+    polyline = polyline.set_index('index')
     maritime_temp, maritime_dew, continental_temp, continental_dew = identify_madis(tfm.time.data.astype('datetime64[s]').astype(float), madis_ds_temp, madis_ds_dew,
                madis_ds_time.astype('datetime64[s]').astype(float), madis_ds_lat, madis_ds_lon, polyline)
     tfm_w_sfc = tfm.copy()
