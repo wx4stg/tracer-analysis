@@ -367,6 +367,21 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
     continental_sonde_lats = all_sonde_lats[all_sonde_sbf_side == -2]
     continental_time_indices = orig_time_indices[all_sonde_sbf_side == -2]
 
+    if len(continental_sonde_dts) == 0:
+        print('Warning: No continental soundings!')
+        continental_sonde_dts = np.array([tfm.time.data[3]]).astype('datetime64[s]')
+        continental_sonde_lats = [0]
+        continental_sonde_lons = [0]
+        continental_sonde_files = ['artificial']
+    if len(maritime_sonde_dts) == 0:
+        print('Warning: No maritime soundings!')
+        maritime_sonde_dts = np.array([tfm.time.data[3]]).astype('datetime64[s]')
+        maritime_sonde_lats = [0]
+        maritime_sonde_lons = [0]
+        maritime_sonde_files = ['artificial']
+
+
+
     continental_sounding_dataset = xr.Dataset(coords={'time' : continental_sonde_dts, 'vertical_levels' : np.arange(n_sounding_levels)},
                                 data_vars={
                                     'pres' : (['time', 'vertical_levels'], np.full((continental_sonde_dts.shape[0], n_sounding_levels), np.nan)),
@@ -413,7 +428,8 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
                 'FlightTime', 'pres', 'tdry', 'RH', 'WindSpeed', 'WindDirection', 'AGL', 'AGL2', 'alt', 'Longitude', 'Latitude', 'y', 'x', 'Tv', 'dp', 'rho',
                 'e', 'v_wind', 'u_wind', 'range', 'rv', 'MSL2', 'UTC_DAY', 'UTC_TIME', 'UTC_AMPM', 'ELAPSED_TIME', 'ELAPSED_TIME2', 'ELAPSED_TIME3', 'FrostPoint']
                 )
-            
+        if this_sonde_data.shape[0] < 5:
+            continue
         if sbf == -1:
             obs_sounding_dataset = maritime_sounding_dataset
             time_idx = np.argwhere(maritime_time_indices == this_itr)[0][0]
@@ -666,13 +682,13 @@ def compute_sounding_stats(tfm):
         ccn6 = tfm[f'{side}_ccn_profile_0.6'].data
         ccn4 = tfm[f'{side}_ccn_profile_0.4'].data
 
-        mlcapes = np.zeros(tfm.time.shape[0])
-        mlcins = np.zeros(tfm.time.shape[0])
-        mlecapes = np.zeros(tfm.time.shape[0])
-        lcls = np.zeros(tfm.time.shape[0])
-        lfcs = np.zeros(tfm.time.shape[0])
-        els = np.zeros(tfm.time.shape[0])
-        ccls = np.zeros(tfm.time.shape[0])
+        mlcapes = np.full(tfm.time.shape[0], np.nan)
+        mlcins = np.full(tfm.time.shape[0], np.nan)
+        mlecapes = np.full(tfm.time.shape[0], np.nan)
+        lcls = np.full(tfm.time.shape[0], np.nan)
+        lfcs = np.full(tfm.time.shape[0], np.nan)
+        els = np.full(tfm.time.shape[0], np.nan)
+        ccls = np.full(tfm.time.shape[0], np.nan)
 
         for i in range(tfm.time.shape[0]):
             temp_i = temp[i, :]
@@ -681,7 +697,8 @@ def compute_sounding_stats(tfm):
             height_i = height[i, :]
             u_i = u[i, :]
             v_i = v[i, :]
-
+            if np.all(np.isnan(temp_i)) or np.all(np.isnan(dew_i)) or np.all(np.isnan(pressure_i)) or np.all(np.isnan(height_i)):
+                continue
             spc_hum = mpcalc.specific_humidity_from_dewpoint(pressure_i, dew_i)
             try:
                 mlcape, mlcin = mpcalc.mixed_layer_cape_cin(pressure_i, temp_i, dew_i)
@@ -1445,18 +1462,23 @@ if __name__ == '__main__':
         print('I don\'t have EET for this day, computing it')
         add_eet_to_radar_data(date_i_want, client)
     tfm_eet = add_eet_to_tobac_data(tfm_coord, date_i_want, client, should_debug=should_debug)
-    tfm_ts = add_timeseries_data_to_toabc_path(tfm_eet, date_i_want, client=client, should_debug=should_debug)
+    tfm_ts = add_timeseries_data_to_toabc_path(tfm_eet, date_i_want, client=client, should_debug=True)
     print('Adding satellite data to tobac data')
     tfm_ctt = add_goes_data_to_tobac_path(tfm_ts, client, should_debug=should_debug)
-
-
+    print('Adding seabreeze')
     tfm_seabreeze = add_seabreeze_to_features(tfm_ctt, client, should_debug=should_debug)
+    print('Adding radiosondes')
     tfm_w_profiles = add_radiosonde_data(tfm_seabreeze, should_debug=should_debug)
+    print('Adding sfc obs')
     tfm_w_sfc = add_madis_data(tfm_w_profiles, should_debug=should_debug, client=client)
+    print('Adding 0.6% aerosols')
     tfm_w_aerosols = add_sfc_aerosol_data(tfm_w_sfc, ss_lower_bound=0.6, ss_upper_bound=0.65, ss_target=0.6)
+    print('Adding 0.4% aerosols')
     tfm_w_aerosols = add_sfc_aerosol_data(tfm_w_aerosols, ss_lower_bound=0.34, ss_upper_bound=0.4, ss_target=0.4)
     # Compute aircraft aerosol passes here
+    print('Computing sounding stats')
     tfm_sounding_stats = compute_sounding_stats(tfm_w_aerosols)
+    print('Converting segmentation mask to cell and track')
     tfm_w_parents = generate_seg_mask_cell_track(generate_seg_mask_cell_track(tfm_sounding_stats, convert_to='track'), convert_to='cell')
     below_cloud_processing(tfm_w_parents, date_i_want)
     print('Converting to track time')
