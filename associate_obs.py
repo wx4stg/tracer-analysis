@@ -1462,7 +1462,7 @@ if __name__ == '__main__':
         print('I don\'t have EET for this day, computing it')
         add_eet_to_radar_data(date_i_want, client)
     tfm_eet = add_eet_to_tobac_data(tfm_coord, date_i_want, client, should_debug=should_debug)
-    tfm_ts = add_timeseries_data_to_toabc_path(tfm_eet, date_i_want, client=client, should_debug=True)
+    tfm_ts = add_timeseries_data_to_toabc_path(tfm_eet, date_i_want, client=client, should_debug=should_debug)
     print('Adding satellite data to tobac data')
     tfm_ctt = add_goes_data_to_tobac_path(tfm_ts, client, should_debug=should_debug)
     print('Adding seabreeze')
