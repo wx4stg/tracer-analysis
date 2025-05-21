@@ -654,23 +654,7 @@ def add_madis_data(tfm, should_debug=False, client=None):
 
 
 def compute_sounding_stats(tfm):
-    feature_pressure_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
-    feature_msl_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
-    feature_temp_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
-    feature_dew_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
-    feature_u_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
-    feature_v_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
-    feature_ccn6_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
-    feature_ccn4_profile = np.zeros((tfm.feature.shape[0], tfm.vertical_levels.shape[0]))
-
-    feature_mlcape = np.zeros((tfm.feature.shape[0]))
-    feature_mlcin = np.zeros((tfm.feature.shape[0]))
-    feature_mlecape = np.zeros((tfm.feature.shape[0]))
-    feature_lcl = np.zeros((tfm.feature.shape[0]))
-    feature_lfc = np.zeros((tfm.feature.shape[0]))
-    feature_el = np.zeros((tfm.feature.shape[0]))
-    feature_ccl = np.zeros((tfm.feature.shape[0]))
-
+    tfm_stats = tfm.copy()
     for sidenum, side in enumerate(['continental', 'maritime']):
         sidenum -= 2
         temp = tfm[f'{side}_temperature_profile'].data * units.degC
@@ -689,6 +673,11 @@ def compute_sounding_stats(tfm):
         lfcs = np.full(tfm.time.shape[0], np.nan)
         els = np.full(tfm.time.shape[0], np.nan)
         ccls = np.full(tfm.time.shape[0], np.nan)
+        conv_Ts = np.full(tfm.time.shape[0], np.nan)
+        lapses = np.full(tfm.time.shape[0], np.nan)
+        bwds = np.full(tfm.time.shape[0], np.nan)
+        sfc_rhes = np.full(tfm.time.shape[0], np.nan)
+        ll_rhes = np.full(tfm.time.shape[0], np.nan)
 
         for i in range(tfm.time.shape[0]):
             temp_i = temp[i, :]
@@ -722,12 +711,19 @@ def compute_sounding_stats(tfm):
             lfc, _ = mpcalc.lfc(pressure_i, temp_i, dew_i)
             el, _ = mpcalc.el(pressure_i, temp_i, dew_i)
             try:
-                ccl, _, _ = mpcalc.ccl(pressure_i, temp_i, dew_i)
+                ccl, _, conv_T = mpcalc.ccl(pressure_i, temp_i, dew_i)
             except IndexError:
                 ccl = np.nan * units.m
-
+                conv_T = np.nan
             if type(mlecape) == int and mlecape == 0:
                 mlecape = 0 * units('J/kg')
+            six_km_height = np.argmin(np.abs(height_i - 6000 * units.meter).m)
+            six_km_lapse = (temp_i[0] - temp_i[six_km_height]) / ((height_i[0] - height_i[six_km_height])/1000)
+            six_km_bwd = ((u_i[0] - u_i[six_km_height])**2 + (v_i[0] - v_i[six_km_height])**2)**0.5
+            sfc_rh = mpcalc.relative_humidity_from_dewpoint(temp_i[0], dew_i[0])
+            ll_rh = mpcalc.relative_humidity_from_dewpoint(temp_i[:six_km_height], dew_i[:six_km_height])
+            ll_rh = np.nanmean(ll_rh)
+
             mlcapes[i] = mlcape.magnitude
             mlcins[i] = mlcin.magnitude
             mlecapes[i] = mlecape.magnitude
@@ -735,44 +731,27 @@ def compute_sounding_stats(tfm):
             lfcs[i] = lfc.magnitude
             els[i] = el.magnitude
             ccls[i] = ccl.magnitude
+            conv_Ts[i] = conv_T.magnitude
+            lapses[i] = six_km_lapse.magnitude
+            bwds[i] = six_km_bwd.magnitude
+            sfc_rhes[i] = sfc_rh.magnitude
+            ll_rhes[i] = ll_rh.magnitude
 
-        features_matching = np.where(tfm.feature_seabreeze.data == sidenum)[0]
-        for matching_feat_idx in features_matching:
-            matching_time_idx = tfm.feature_time_index.data[matching_feat_idx]
-            feature_pressure_profile[matching_feat_idx, :] = pressure[matching_time_idx, :]
-            feature_msl_profile[matching_feat_idx, :] = height[matching_time_idx, :]
-            feature_temp_profile[matching_feat_idx, :] = temp[matching_time_idx, :]
-            feature_dew_profile[matching_feat_idx, :] = dew[matching_time_idx, :]
-            feature_u_profile[matching_feat_idx, :] = u[matching_time_idx, :]
-            feature_v_profile[matching_feat_idx, :] = v[matching_time_idx, :]
-            feature_ccn6_profile[matching_feat_idx, :] = ccn6[matching_time_idx, :]
-            feature_ccn4_profile[matching_feat_idx, :] = ccn4[matching_time_idx, :]
-            feature_mlcape[matching_feat_idx] = mlcapes[matching_time_idx]
-            feature_mlcin[matching_feat_idx] = mlcins[matching_time_idx]
-            feature_mlecape[matching_feat_idx] = mlecapes[matching_time_idx]
-            feature_lcl[matching_feat_idx] = lcls[matching_time_idx]
-            feature_lfc[matching_feat_idx] = lfcs[matching_time_idx]
-            feature_el[matching_feat_idx] = els[matching_time_idx]
-            feature_ccl[matching_feat_idx] = ccls[matching_time_idx]
 
-    tfm_stats = tfm.copy()
-    tfm_stats = tfm_stats.assign({
-        'feature_pressure_profile' : (('feature', 'vertical_levels'), feature_pressure_profile),
-        'feature_msl_profile' : (('feature', 'vertical_levels'), feature_msl_profile),
-        'feature_temp_profile' : (('feature', 'vertical_levels'), feature_temp_profile),
-        'feature_dew_profile' : (('feature', 'vertical_levels'), feature_dew_profile),
-        'feature_u_profile' : (('feature', 'vertical_levels'), feature_u_profile),
-        'feature_v_profile' : (('feature', 'vertical_levels'), feature_v_profile),
-        'feature_ccn_profile_0.6' : (('feature', 'vertical_levels'), feature_ccn6_profile),
-        'feature_ccn_profile_0.4' : (('feature', 'vertical_levels'), feature_ccn4_profile),
-        'feature_mlcape' : (('feature',), feature_mlcape),
-        'feature_mlcin' : (('feature',), feature_mlcin),
-        'feature_mlecape' : (('feature',), feature_mlecape),
-        'feature_lcl' : (('feature',), feature_lcl),
-        'feature_lfc' : (('feature',), feature_lfc),
-        'feature_el' : (('feature',), feature_el),
-        'feature_ccl' : (('feature',), feature_ccl)
-    })
+        tfm_stats = tfm_stats.assign({
+            f'{side}_mlcape' : (('time',), mlcapes),
+            f'{side}_mlcin' : (('time',), mlcins),
+            f'{side}_mlecape' : (('time',), mlecapes),
+            f'{side}_lcl' : (('time',), lcls),
+            f'{side}_lfc' : (('time',), lfcs),
+            f'{side}_el' : (('time',), els),
+            f'{side}_ccl' : (('time',), ccls),
+            f'{side}_convT' : (('time',), conv_Ts),
+            f'{side}_six_km_lapse' : (('time',), lapses),
+            f'{side}_six_km_bwd' : (('time',), bwds),
+            f'{side}_sfc_rh' : (('time',), sfc_rhes),
+            f'{side}_ll_rh' : (('time',), ll_rhes)
+        })
     return tfm_stats
 
 
@@ -1056,7 +1035,6 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want, client=None, shou
         return 1
     tfm = tobac_data.copy()
     tobac_save_path = f'/Volumes/LtgSSD/tobac_saves/tobac_Save_{date_i_want.strftime('%Y%m%d')}/'
-    melt_layer = 0
     for f in listdir(tobac_save_path):
         if f.startswith('timeseries_data_melt') and f.endswith('.nc'):
             tobac_timeseries_path = path.join(tobac_save_path, f)
@@ -1118,325 +1096,105 @@ def generate_seg_mask_cell_track(tobac_data, convert_to='cell'):
     return tobac_data
 
 
-def convert_to_track_time(tfmo):
+def convert_to_track_time(sbf_obs):
     for old_name in ['min_L2-MCMIPC', 'max_reflectivity']:
         new_name = 'feature_'+old_name
         new_name = new_name.replace('-', '_')
-        ren = tfmo[old_name].rename(new_name)
-        tfmo[new_name] = ren
-        tfmo = tfmo.drop_vars(old_name)
-        tfmo.drop_vars('feature_maxrefl')
+        ren = sbf_obs[old_name].rename(new_name)
+        sbf_obs[new_name] = ren
+        sbf_obs = sbf_obs.drop_vars(old_name)
 
-    track_seabreezes = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-    track_area = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), 0)
-    track_echo_top = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-    track_flash_count = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-    track_large_flash_count = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-    track_small_flash_count = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-    track_KDP_volume = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-    track_lat_ctr = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-    track_lon_ctr = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-    track_rhoHV_volume = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-    track_ZDR_volume = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-    track_min_L2_MCMIPC = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-
-    track_pressure_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
-    track_height_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
-    track_temperature_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
-    track_dewpoint_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
-    track_u_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
-    track_v_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
-    track_ccn6_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
-    track_ccn4_profile = np.full((tfmo.track.shape[0], tfmo.time.shape[0], tfmo.vertical_levels.shape[0]), np.nan)
-
-
-    track_mlcape = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-    track_mlcin = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-    track_mlecape = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-    track_lcl = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-    track_lfc = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-    track_el = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-    track_ccl = np.full((tfmo.track.shape[0], tfmo.time.shape[0]), np.nan)
-
-    tfmo['feature_parent_track_id'] = tfmo.feature_parent_track_id.compute().astype('int32')
-    vars_to_load_now = ['feature_time_index', 'feature_seabreeze', 'feature_area', 'feature_echotop', 'feature_flash_count', 'feature_flash_count_area_GT_4km',
-                        'feature_flash_count_area_LE_4km', 'feature_kdpvol', 'feature_lat', 'feature_lon', 'feature_rhvdeficitvol', 'feature_zdrvol', 'feature_min_L2_MCMIPC',
-                        'feature_pressure_profile', 'feature_msl_profile', 'feature_temp_profile', 'feature_dew_profile', 'feature_u_profile', 'feature_v_profile', 'feature_ccn_profile_0.6',
-                        'feature_ccn_profile_0.4', 'feature_mlcape', 'feature_mlcin', 'feature_mlecape', 'feature_lcl', 'feature_lfc', 'feature_el', 'feature_ccl']
-    for var in vars_to_load_now:
-        tfmo[var] = tfmo[var].compute()
-    features_with_parents = np.sort(np.where(tfmo.feature_parent_cell_id.compute().data != -1)[0])
-    for i, feature_idx in enumerate(features_with_parents):
-        parent_track = tfmo.feature_parent_track_id.data[feature_idx]
-        time_idx = tfmo.feature_time_index.data[feature_idx]
-
-        # Handle seabreeze (mean if already set)
-        this_feature_seabreeze = tfmo.feature_seabreeze.data[feature_idx]
-        previously_set_seabreeze = track_seabreezes[parent_track, time_idx]
-        if np.isnan(previously_set_seabreeze):
-            track_seabreezes[parent_track, time_idx] = this_feature_seabreeze
-        elif previously_set_seabreeze != this_feature_seabreeze:
-            track_seabreezes[parent_track, time_idx] = np.nanmean([previously_set_seabreeze, this_feature_seabreeze])
-
-
-        # Handle feature area (sum if already set)
-        this_feature_area = tfmo.feature_area.data[feature_idx]
-        previously_set_area = track_area[parent_track, time_idx]
-        if np.isnan(previously_set_area):
-            track_area[parent_track, time_idx] = this_feature_area
-        elif previously_set_area != this_feature_area:
-            track_area[parent_track, time_idx] = previously_set_area + this_feature_area
-
-
-        # Handle echo top (max if already set)
-        this_feature_echo_top = tfmo.feature_echotop.data[feature_idx]
-        previously_set_echo_top = track_echo_top[parent_track, time_idx]
-        if np.isnan(previously_set_echo_top):
-            track_echo_top[parent_track, time_idx] = this_feature_echo_top
-        elif previously_set_echo_top != this_feature_echo_top:
-            track_echo_top[parent_track, time_idx] = np.nanmax([previously_set_echo_top, this_feature_echo_top])
-
-
-        # Handle feature flash count (sum if already set)
-        this_feature_flash_count = tfmo.feature_flash_count.data[feature_idx]
-        previously_set_flash_count = track_flash_count[parent_track, time_idx]
-        if np.isnan(previously_set_flash_count):
-            track_flash_count[parent_track, time_idx] = this_feature_flash_count
-        elif previously_set_flash_count != this_feature_flash_count:
-            track_flash_count[parent_track, time_idx] = np.nansum([previously_set_flash_count, this_feature_flash_count])
-
-
-        # Handle feature large flash count (sum if already set)
-        this_feature_large_flash_count = tfmo.feature_flash_count_area_GT_4km.data[feature_idx]
-        previously_set_large_flash_count = track_large_flash_count[parent_track, time_idx]
-        if np.isnan(previously_set_large_flash_count):
-            track_large_flash_count[parent_track, time_idx] = this_feature_large_flash_count
-        elif previously_set_large_flash_count != this_feature_large_flash_count:
-            track_large_flash_count[parent_track, time_idx] = np.nansum([previously_set_large_flash_count, this_feature_large_flash_count])
-
-
-        # Handle feature small flash count (sum if already set)
-        this_feature_small_flash_count = tfmo.feature_flash_count_area_LE_4km.data[feature_idx]
-        previously_set_small_flash_count = track_small_flash_count[parent_track, time_idx]
-        if np.isnan(previously_set_small_flash_count):
-            track_small_flash_count[parent_track, time_idx] = this_feature_small_flash_count
-        elif previously_set_small_flash_count != this_feature_small_flash_count:
-            track_small_flash_count[parent_track, time_idx] = np.nansum([previously_set_small_flash_count, this_feature_small_flash_count])
-
-
-        # Handle KDP volume (sum if already set)
-        this_feature_KDP_volume = tfmo.feature_kdpvol.data[feature_idx]
-        previously_set_KDP_volume = track_KDP_volume[parent_track, time_idx]
-        if np.isnan(previously_set_KDP_volume):
-            track_KDP_volume[parent_track, time_idx] = this_feature_KDP_volume
-        elif previously_set_KDP_volume != this_feature_KDP_volume:
-            track_KDP_volume[parent_track, time_idx] = np.nansum([previously_set_KDP_volume, this_feature_KDP_volume])
-
-
-        # Handle lat center (mean if already set)
-        this_feature_lat_ctr = tfmo.feature_lat.data[feature_idx]
-        previously_set_lat_ctr = track_lat_ctr[parent_track, time_idx]
-        if np.isnan(previously_set_lat_ctr):
-            track_lat_ctr[parent_track, time_idx] = this_feature_lat_ctr
-        elif previously_set_lat_ctr != this_feature_lat_ctr:
-            track_lat_ctr[parent_track, time_idx] = np.nanmean([previously_set_lat_ctr, this_feature_lat_ctr])
-
-
-        # Handle lon center (mean if already set)
-        this_feature_lon_ctr = tfmo.feature_lon.data[feature_idx]
-        previously_set_lon_ctr = track_lon_ctr[parent_track, time_idx]
-        if np.isnan(previously_set_lon_ctr):
-            track_lon_ctr[parent_track, time_idx] = this_feature_lon_ctr
-        elif previously_set_lon_ctr != this_feature_lon_ctr:
-            track_lon_ctr[parent_track, time_idx] = np.nanmean([previously_set_lon_ctr, this_feature_lon_ctr])
-
-
-        # Handle rhoHV deficit volume (sum if already set)
-        this_feature_rhoHV_volume = tfmo.feature_rhvdeficitvol.data[feature_idx]
-        previously_set_rhoHV_volume = track_rhoHV_volume[parent_track, time_idx]
-        if np.isnan(previously_set_rhoHV_volume):
-            track_rhoHV_volume[parent_track, time_idx] = this_feature_rhoHV_volume
-        elif previously_set_rhoHV_volume != this_feature_rhoHV_volume:
-            track_rhoHV_volume[parent_track, time_idx] = np.nansum([previously_set_rhoHV_volume, this_feature_rhoHV_volume])
-
-
-        # Handle ZDR volume (sum if already set)
-        this_feature_ZDR_volume = tfmo.feature_zdrvol.data[feature_idx]
-        previously_set_ZDR_volume = track_ZDR_volume[parent_track, time_idx]
-        if np.isnan(previously_set_ZDR_volume):
-            track_ZDR_volume[parent_track, time_idx] = this_feature_ZDR_volume
-        elif previously_set_ZDR_volume != this_feature_ZDR_volume:
-            track_ZDR_volume[parent_track, time_idx] = np.nansum([previously_set_ZDR_volume, this_feature_ZDR_volume])
-
-
-
-        # Handle minL2-MCMIPC (cloud top temperature) (min if already set)
-        this_feature_min_L2_MCMIPC = tfmo.feature_min_L2_MCMIPC.data[feature_idx]
-        previously_set_min_L2_MCMIPC = track_min_L2_MCMIPC[parent_track, time_idx]
-        if np.isnan(previously_set_min_L2_MCMIPC):
-            track_min_L2_MCMIPC[parent_track, time_idx] = this_feature_min_L2_MCMIPC
-        elif previously_set_min_L2_MCMIPC != this_feature_min_L2_MCMIPC:
-            track_min_L2_MCMIPC[parent_track, time_idx] = np.nanmin([previously_set_min_L2_MCMIPC, this_feature_min_L2_MCMIPC])
-
-
-        # Handle pressure profile (mean if already set)
-        this_feature_pressure_profile = tfmo.feature_pressure_profile.data[feature_idx, :]
-        previously_set_pressure_profile = track_pressure_profile[parent_track, time_idx, :]
-        if np.all(np.isnan(previously_set_pressure_profile)):
-            track_pressure_profile[parent_track, time_idx, :] = this_feature_pressure_profile
-        elif not np.all(previously_set_pressure_profile == this_feature_pressure_profile):
-            track_pressure_profile[parent_track, time_idx, :] = np.nanmean([previously_set_pressure_profile, this_feature_pressure_profile], axis=0)
-
-
-        # Handle height profile (mean if already set)
-        this_feature_height_profile = tfmo.feature_msl_profile.data[feature_idx, :]
-        previously_set_height_profile = track_height_profile[parent_track, time_idx, :]
-        if np.all(np.isnan(previously_set_height_profile)):
-            track_height_profile[parent_track, time_idx, :] = this_feature_height_profile
-        elif not np.all(previously_set_height_profile == this_feature_height_profile):
-            track_height_profile[parent_track, time_idx, :] = np.nanmean([previously_set_height_profile, this_feature_height_profile], axis=0)
-
-
-        # Handle temperature profile (mean if already set)
-        this_feature_temperature_profile = tfmo.feature_temp_profile.data[feature_idx, :]
-        previously_set_temperature_profile = track_temperature_profile[parent_track, time_idx, :]
-        if np.all(np.isnan(previously_set_temperature_profile)):
-            track_temperature_profile[parent_track, time_idx, :] = this_feature_temperature_profile
-        elif not np.all(previously_set_temperature_profile == this_feature_temperature_profile):
-            track_temperature_profile[parent_track, time_idx, :] = np.nanmean([previously_set_temperature_profile, this_feature_temperature_profile], axis=0)
-
-
-        # Handle dewpoint profile (mean if already set)
-        this_feature_dewpoint_profile = tfmo.feature_dew_profile.data[feature_idx, :]
-        previously_set_dewpoint_profile = track_dewpoint_profile[parent_track, time_idx, :]
-        if np.all(np.isnan(previously_set_dewpoint_profile)):
-            track_dewpoint_profile[parent_track, time_idx, :] = this_feature_dewpoint_profile
-        elif not np.all(previously_set_dewpoint_profile == this_feature_dewpoint_profile):
-            track_dewpoint_profile[parent_track, time_idx, :] = np.nanmean([previously_set_dewpoint_profile, this_feature_dewpoint_profile], axis=0)
-
-
-        # Handle u profile (mean if already set)
-        this_feature_u_profile = tfmo.feature_u_profile.data[feature_idx, :]
-        previously_set_u_profile = track_u_profile[parent_track, time_idx, :]
-        if np.all(np.isnan(previously_set_u_profile)):
-            track_u_profile[parent_track, time_idx, :] = this_feature_u_profile
-        elif not np.all(previously_set_u_profile == this_feature_u_profile):
-            track_u_profile[parent_track, time_idx, :] = np.nanmean([previously_set_u_profile, this_feature_u_profile], axis=0)
-
-
-        # Handle v profile (mean if already set)
-        this_feature_v_profile = tfmo.feature_v_profile.data[feature_idx, :]
-        previously_set_v_profile = track_v_profile[parent_track, time_idx, :]
-        if np.all(np.isnan(previously_set_v_profile)):
-            track_v_profile[parent_track, time_idx, :] = this_feature_v_profile
-        elif not np.all(previously_set_v_profile == this_feature_v_profile):
-            track_v_profile[parent_track, time_idx, :] = np.nanmean([previously_set_v_profile, this_feature_v_profile], axis=0)
-
-
-        # Handle ccn profile (mean if already set)
-        this_feature_ccn6_profile = tfmo['feature_ccn_profile_0.6'].data[feature_idx, :]
-        previously_set_ccn6_profile = track_ccn6_profile[parent_track, time_idx, :]
-        if np.all(np.isnan(previously_set_ccn6_profile)):
-            track_ccn6_profile[parent_track, time_idx, :] = this_feature_ccn6_profile
-        elif not np.all(previously_set_ccn6_profile == this_feature_ccn6_profile):
-            track_ccn6_profile[parent_track, time_idx, :] = np.nanmean([previously_set_ccn6_profile, this_feature_ccn6_profile], axis=0)
-
-        this_feature_ccn4_profile = tfmo['feature_ccn_profile_0.4'].data[feature_idx, :]
-        previously_set_ccn4_profile = track_ccn4_profile[parent_track, time_idx, :]
-        if np.all(np.isnan(previously_set_ccn4_profile)):
-            track_ccn4_profile[parent_track, time_idx, :] = this_feature_ccn4_profile
-        elif not np.all(previously_set_ccn4_profile == this_feature_ccn4_profile):
-            track_ccn4_profile[parent_track, time_idx, :] = np.nanmean([previously_set_ccn4_profile, this_feature_ccn4_profile], axis=0)
-
-
-        # Handle mlcape (mean if already set)
-        this_feature_mlcape = tfmo.feature_mlcape.data[feature_idx]
-        previously_set_mlcape = track_mlcape[parent_track, time_idx]
-        if np.isnan(previously_set_mlcape):
-            track_mlcape[parent_track, time_idx] = this_feature_mlcape
-        elif previously_set_mlcape != this_feature_mlcape:
-            track_mlcape[parent_track, time_idx] = np.nanmean([previously_set_mlcape, this_feature_mlcape])
-        
-        # Handle mlcin (mean if already set)
-        this_feature_mlcin = tfmo.feature_mlcin.data[feature_idx]
-        previously_set_mlcin = track_mlcin[parent_track, time_idx]
-        if np.isnan(previously_set_mlcin):
-            track_mlcin[parent_track, time_idx] = this_feature_mlcin
-        elif previously_set_mlcin != this_feature_mlcin:
-            track_mlcin[parent_track, time_idx] = np.nanmean([previously_set_mlcin, this_feature_mlcin])
-
-        # Handle mlecape (mean if already set)
-        this_feature_mlecape = tfmo.feature_mlecape.data[feature_idx]
-        previously_set_mlecape = track_mlecape[parent_track, time_idx]
-        if np.isnan(previously_set_mlecape):
-            track_mlecape[parent_track, time_idx] = this_feature_mlecape
-        elif previously_set_mlecape != this_feature_mlecape:
-            track_mlecape[parent_track, time_idx] = np.nanmean([previously_set_mlecape, this_feature_mlecape])
-
-        # Handle lcl (min if already set)
-        this_feature_lcl = tfmo.feature_lcl.data[feature_idx]
-        previously_set_lcl = track_lcl[parent_track, time_idx]
-        if np.isnan(previously_set_lcl):
-            track_lcl[parent_track, time_idx] = this_feature_lcl
-        elif previously_set_lcl != this_feature_lcl:
-            track_lcl[parent_track, time_idx] = np.nanmin([previously_set_lcl, this_feature_lcl])
-        
-        # Handle lfc (min if already set)
-        this_feature_lfc = tfmo.feature_lfc.data[feature_idx]
-        previously_set_lfc = track_lfc[parent_track, time_idx]
-        if np.isnan(previously_set_lfc):
-            track_lfc[parent_track, time_idx] = this_feature_lfc
-        elif previously_set_lfc != this_feature_lfc:
-            track_lfc[parent_track, time_idx] = np.nanmin([previously_set_lfc, this_feature_lfc])
-        
-        # Handle el (max if already set)
-        this_feature_el = tfmo.feature_el.data[feature_idx]
-        previously_set_el = track_el[parent_track, time_idx]
-        if np.isnan(previously_set_el):
-            track_el[parent_track, time_idx] = this_feature_el
-        elif previously_set_el != this_feature_el:
-            track_el[parent_track, time_idx] = np.nanmax([previously_set_el, this_feature_el])
-        
-        # Handle ccl (min if already set)
-        this_feature_ccl = tfmo.feature_ccl.data[feature_idx]
-        previously_set_ccl = track_ccl[parent_track, time_idx]
-        if np.isnan(previously_set_ccl):
-            track_ccl[parent_track, time_idx] = this_feature_ccl
-        elif previously_set_ccl != this_feature_ccl:
-            track_ccl[parent_track, time_idx] = np.nanmin([previously_set_ccl, this_feature_ccl])
-
-
-    tfmo = tfmo.assign({
-        'track_seabreeze' : (('track', 'time'), track_seabreezes),
-        'track_area' : (('track', 'time'), track_area),
-        'track_echo_top' : (('track', 'time'), track_echo_top),
-        'track_flash_count' : (('track', 'time'), track_flash_count),
-        'track_flash_count_area_GT_4km' : (('track', 'time'), track_large_flash_count),
-        'track_flash_count_area_LE_4km' : (('track', 'time'), track_small_flash_count),
-        'track_kdpvol' : (('track', 'time'), track_KDP_volume),
-        'track_lat' : (('track', 'time'), track_lat_ctr),
-        'track_lon' : (('track', 'time'), track_lon_ctr),
-        'track_rhvdeficitvol' : (('track', 'time'), track_rhoHV_volume),
-        'track_zdrvol' : (('track', 'time'), track_ZDR_volume),
-        'track_min_L2_MCMIPC' : (('track', 'time'), track_min_L2_MCMIPC),
-        'track_pressure_profile' : (('track', 'time', 'vertical_levels'), track_pressure_profile),
-        'track_msl_profile' : (('track', 'time', 'vertical_levels'), track_height_profile),
-        'track_temp_profile' : (('track', 'time', 'vertical_levels'), track_temperature_profile),
-        'track_dew_profile' : (('track', 'time', 'vertical_levels'), track_dewpoint_profile),
-        'track_u_profile' : (('track', 'time', 'vertical_levels'), track_u_profile),
-        'track_v_profile' : (('track', 'time', 'vertical_levels'), track_v_profile),
-        'track_ccn_profile_0.6' : (('track', 'time', 'vertical_levels'), track_ccn6_profile),
-        'track_ccn_profile_0.4' : (('track', 'time', 'vertical_levels'), track_ccn4_profile),
-        'track_mlcape' : (('track', 'time'), track_mlcape),
-        'track_mlcin' : (('track', 'time'), track_mlcin),
-        'track_mlecape' : (('track', 'time'), track_mlecape),
-        'track_lcl' : (('track', 'time'), track_lcl),
-        'track_lfc' : (('track', 'time'), track_lfc),
-        'track_el' : (('track', 'time'), track_el),
-        'track_ccl' : (('track', 'time'), track_ccl)
-    })
-    return tfmo
-
+    time_only_vars = [dv for dv in sbf_obs.data_vars if ('time',) == sbf_obs[dv].dims and dv != 'closest_satellite_time']
+    time_only = sbf_obs[time_only_vars].reset_coords(drop=True)
+    vars_to_reproc = np.unique([dv.replace('continental', '').replace('maritime', '') for dv in time_only_vars])
+    time_only_features = time_only.isel(time=sbf_obs.feature_time_index.data)
+    time_only_features = time_only_features.assign(
+        feature = ('time', sbf_obs.feature.data)
+    )
+    time_only_features = time_only_features.swap_dims({'time' : 'feature'}).drop_vars('time')
+    for dv in vars_to_reproc:
+        print(dv)
+        continental_var = time_only_features[f'continental{dv}']
+        maritime_var = time_only_features[f'maritime{dv}']
+        feature_var = xr.where(sbf_obs.feature_seabreeze == -2, continental_var, xr.where(sbf_obs.feature_seabreeze == -1, maritime_var, np.nan))
+        feature_var = feature_var.rename(f'feature{dv}')
+        time_only_features[f'feature{dv}'] = feature_var
+        time_only_features = time_only_features.drop_vars([f'continental{dv}', f'maritime{dv}'])
+    sbf_obs = xr.merge([sbf_obs, time_only_features])
+    feature_only_vars = [dv for dv in sbf_obs.data_vars if 'feature' in sbf_obs[dv].dims]
+    vlevels_only_vars = [dv for dv in sbf_obs.data_vars if 'vertical_levels' in sbf_obs[dv].dims]
+    feature_only = sbf_obs[feature_only_vars].reset_coords(drop=True).drop_vars('feature_maxrefl')
+    vlevels_only = sbf_obs[vlevels_only_vars].reset_coords(drop=True)
+    regrouped = feature_only.to_pandas().groupby(['feature_parent_track_id', 'feature_time_index']).agg({
+        'feature_area': np.nansum,
+        'feature_ccl' : np.nanmean,
+        'feature_convT' : np.nanmean,
+        'feature_echotop' : np.nanmax,
+        'feature_el' : np.nanmean,
+        'feature_lcl' : np.nanmean,
+        'feature_lfc' : np.nanmean,
+        'feature_ll_rh' : np.nanmean,
+        'feature_flash_count': np.nansum,
+        'feature_flash_count_area_GT_4km': np.nansum,
+        'feature_flash_count_area_LE_4km': np.nansum,
+        'feature_flash_density': np.nansum,
+        'feature_flash_density_area_GT_4km' : np.nansum,
+        'feature_flash_density_area_LE_4km' : np.nansum,
+        'feature_grid_cell_count' : np.nansum,
+        'feature_hdim1_coordinate' : np.nanmean,
+        'feature_hdim2_coordinate' : np.nanmean,
+        'feature_kdpcol' : np.nanmax,
+        'feature_kdpcol_mean' : np.nanmean,
+        'feature_kdpcol_total' : np.nansum,
+        'feature_kdpwt_total' : np.nansum,
+        'feature_lat' : np.nanmean,
+        'feature_lon' : np.nanmean,
+        'feature_max_reflectivity' : np.nanmax,
+        'feature_min_L2_MCMIPC': np.nanmin,
+        'feature_mlcape' : np.nanmean,
+        'feature_mlcin' : np.nanmean,
+        'feature_mlecape' : np.nanmean,
+        'feature_projection_x_coordinate' : np.nanmean,
+        'feature_projection_y_coordinate' : np.nanmean,
+        'feature_rhvdeficitcol' : np.nanmax,
+        'feature_rhvdeficitcol_mean' : np.nanmean,
+        'feature_rhvdeficitcol_total' : np.nansum,
+        'feature_rhvdeficitwt_total' : np.nansum,
+        'feature_seabreeze' : np.nanmean,
+        'feature_sfc_rh' : np.nanmean,
+        'feature_six_km_bwd' : np.nanmean,
+        'feature_six_km_lapse' : np.nanmean,
+        'feature_zdrcol' : np.nanmax,
+        'feature_zdrcol_mean' : np.nanmean,
+        'feature_zdrcol_total' : np.nansum,
+        'feature_zdrwt_total' : np.nansum
+    }, engine='numba', engine_kwargs={'nopython' : True, 'parallel': True})
+    regrouped.columns = [col.replace('feature', 'track') for col in regrouped.columns.values]
+    regrouped = regrouped.to_xarray()
+    regrouped = regrouped.reindex(feature_parent_track_id=sbf_obs.track.data, fill_value=np.nan).rename({'feature_parent_track_id' : 'track'})
+    regrouped['track'] = regrouped['track'].astype(int)
+    regrouped['time'] = sbf_obs.time[regrouped.feature_time_index]
+    regrouped = regrouped.swap_dims({'feature_time_index': 'time'}).reset_coords('feature_time_index', drop=True)
+    sbf_obs = xr.merge([regrouped, sbf_obs])
+    vlevels_feature = vlevels_only.isel(time=sbf_obs.feature_time_index.data)
+    vlevels_feature = vlevels_feature.assign(feature=(('time'), sbf_obs.feature.data)).swap_dims({'time' : 'feature'}).drop_vars('time')
+    vars_to_reproc = np.unique([dv.replace('maritime', '').replace('continental', '') for dv in list(vlevels_feature.data_vars)]).tolist()
+    for dv in vars_to_reproc:
+        maritime_var = vlevels_feature[f'maritime{dv}']
+        continental_var = vlevels_feature[f'continental{dv}']
+        vlevels_feature[f'feature{dv}'] = xr.where(sbf_obs.feature_seabreeze == -2, continental_var, xr.where(sbf_obs.feature_seabreeze == -1, maritime_var, np.nan))
+        vlevels_feature = vlevels_feature.drop_vars([maritime_var.name, continental_var.name])
+    vlevels_feature = vlevels_feature.assign_coords(feature_parent_track_id=sbf_obs.feature_parent_track_id)
+    vlevels_feature = vlevels_feature.assign_coords(feature_time_index=sbf_obs.feature_time_index)
+    df = vlevels_feature.to_dataframe()
+    grouped = df.groupby(['feature_parent_track_id', 'feature_time_index', 'vertical_levels']).mean()
+    grouped = grouped.to_xarray().rename({'feature_parent_track_id' : 'track'})
+    grouped['time'] = sbf_obs.time.isel(time=grouped.feature_time_index)
+    grouped = grouped.swap_dims({'feature_time_index': 'time'}).reset_coords('feature_time_index', drop=True).reindex(track=sbf_obs.track.data, fill_value=np.nan)
+    rename_dict = {dv : dv.replace('feature', 'track') for dv in grouped.data_vars}
+    grouped = grouped.rename(rename_dict)
+    sbf_obs = xr.merge([sbf_obs, grouped])
+    return sbf_obs
 
 if __name__ == '__main__':
     if USE_DASK:
@@ -1480,11 +1238,11 @@ if __name__ == '__main__':
     tfm_sounding_stats = compute_sounding_stats(tfm_w_aerosols)
     print('Converting segmentation mask to cell and track')
     tfm_w_parents = generate_seg_mask_cell_track(generate_seg_mask_cell_track(tfm_sounding_stats, convert_to='track'), convert_to='cell')
-    below_cloud_processing(tfm_w_parents, date_i_want)
     print('Converting to track time')
     tfm_obs = convert_to_track_time(tfm_w_parents)
     final_out_path = tfm_path.replace('.zarr', '-obs.zarr')
-    tfm_obs = tfm_obs.drop_vars(['feature_time_str'], errors='ignore')
+    tfm_obs = tfm_w_parents.drop_vars(['feature_time_str'], errors='ignore')
+    # below_cloud_processing(tfm_w_parents, date_i_want)
     client.close()
     if path.exists(final_out_path):
         rmtree(final_out_path)

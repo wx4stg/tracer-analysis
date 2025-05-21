@@ -11,4 +11,4 @@ sam_sbf_img/
 sam_polyline/*_interpolated.json
 agu_figs/
 debug-figs-*/
-below_cloud/figs/*
+below_cloud/*
