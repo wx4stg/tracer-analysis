@@ -1184,6 +1184,7 @@ def convert_to_track_time(sbf_obs):
         continental_var = vlevels_feature[f'continental{dv}']
         vlevels_feature[f'feature{dv}'] = xr.where(sbf_obs.feature_seabreeze == -2, continental_var, xr.where(sbf_obs.feature_seabreeze == -1, maritime_var, np.nan))
         vlevels_feature = vlevels_feature.drop_vars([maritime_var.name, continental_var.name])
+    sbf_obs = xr.merge([sbf_obs, vlevels_feature])
     vlevels_feature = vlevels_feature.assign_coords(feature_parent_track_id=sbf_obs.feature_parent_track_id)
     vlevels_feature = vlevels_feature.assign_coords(feature_time_index=sbf_obs.feature_time_index)
     df = vlevels_feature.to_dataframe()
@@ -1241,8 +1242,8 @@ if __name__ == '__main__':
     print('Converting to track time')
     tfm_obs = convert_to_track_time(tfm_w_parents)
     final_out_path = tfm_path.replace('.zarr', '-obs.zarr')
-    tfm_obs = tfm_w_parents.drop_vars(['feature_time_str'], errors='ignore')
-    # below_cloud_processing(tfm_w_parents, date_i_want)
+    tfm_obs = tfm_obs.drop_vars(['feature_time_str'], errors='ignore')
+    below_cloud_processing(tfm_obs, date_i_want)
     client.close()
     if path.exists(final_out_path):
         rmtree(final_out_path)
