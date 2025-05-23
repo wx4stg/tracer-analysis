@@ -1131,9 +1131,6 @@ def convert_to_track_time(sbf_obs):
         'feature_convT' : np.nanmean,
         'feature_echotop' : np.nanmax,
         'feature_el' : np.nanmean,
-        'feature_lcl' : np.nanmean,
-        'feature_lfc' : np.nanmean,
-        'feature_ll_rh' : np.nanmean,
         'feature_flash_count': np.nansum,
         'feature_flash_count_area_GT_4km': np.nansum,
         'feature_flash_count_area_LE_4km': np.nansum,
@@ -1146,8 +1143,12 @@ def convert_to_track_time(sbf_obs):
         'feature_kdpcol' : np.nanmax,
         'feature_kdpcol_mean' : np.nanmean,
         'feature_kdpcol_total' : np.nansum,
+        'feature_kdpvol' : np.nansum,
         'feature_kdpwt_total' : np.nansum,
         'feature_lat' : np.nanmean,
+        'feature_lcl' : np.nanmean,
+        'feature_lfc' : np.nanmean,
+        'feature_ll_rh' : np.nanmean,
         'feature_lon' : np.nanmean,
         'feature_max_reflectivity' : np.nanmax,
         'feature_min_L2_MCMIPC': np.nanmin,
@@ -1159,6 +1160,7 @@ def convert_to_track_time(sbf_obs):
         'feature_rhvdeficitcol' : np.nanmax,
         'feature_rhvdeficitcol_mean' : np.nanmean,
         'feature_rhvdeficitcol_total' : np.nansum,
+        'feature_rhvdeficitvol' : np.nansum,
         'feature_rhvdeficitwt_total' : np.nansum,
         'feature_seabreeze' : np.nanmean,
         'feature_sfc_rh' : np.nanmean,
@@ -1167,6 +1169,7 @@ def convert_to_track_time(sbf_obs):
         'feature_zdrcol' : np.nanmax,
         'feature_zdrcol_mean' : np.nanmean,
         'feature_zdrcol_total' : np.nansum,
+        'feature_zdrvol' : np.nansum,
         'feature_zdrwt_total' : np.nansum
     }, engine='numba', engine_kwargs={'nopython' : True, 'parallel': True})
     regrouped.columns = [col.replace('feature', 'track') for col in regrouped.columns.values]
@@ -1205,7 +1208,7 @@ if __name__ == '__main__':
     date_i_want = sys.argv[1]
     date_i_want = dt.strptime(date_i_want, '%Y-%m-%d')
     should_debug = ((len(sys.argv) > 2) and (sys.argv[2] == '--debug'))
-    if should_debug:
+    if True:
         pth(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/coords').mkdir(parents=True, exist_ok=True)
         pth(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/tobac_ts').mkdir(parents=True, exist_ok=True)
         pth(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/eet').mkdir(parents=True, exist_ok=True)
@@ -1221,7 +1224,8 @@ if __name__ == '__main__':
         print('I don\'t have EET for this day, computing it')
         add_eet_to_radar_data(date_i_want, client)
     tfm_eet = add_eet_to_tobac_data(tfm_coord, date_i_want, client, should_debug=should_debug)
-    tfm_ts = add_timeseries_data_to_toabc_path(tfm_eet, date_i_want, client=client, should_debug=should_debug)
+    tfm_ts = add_timeseries_data_to_toabc_path(tfm_eet, date_i_want, client=client, should_debug=True)
+    
     print('Adding satellite data to tobac data')
     tfm_ctt = add_goes_data_to_tobac_path(tfm_ts, client, should_debug=should_debug)
     print('Adding seabreeze')
