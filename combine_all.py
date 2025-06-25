@@ -3,8 +3,6 @@ from glob import glob
 from shutil import rmtree
 import numpy as np
 import warnings
-from dask.distributed import Client
-from datetime import datetime as dt, UTC
 from os import path
 from shutil import rmtree
 warnings.filterwarnings('ignore')
@@ -15,63 +13,62 @@ def drop_nontrack(ds):
     ds = ds[keep_vars]
     return ds
 
-
-if __name__ == '__main__':
-    # client = Client('tcp://127.0.0.1:8786')
-    all_res = sorted(glob('/Users/stgardner4/Desktop/tobac_saves_new/tobac_Save*/seabreeze-obs.zarr'))
-    track_offset = 0
-    out_path = '/Users/stgardner4/Desktop/tobac_saves_new/all_tracks.zarr'
-    unified_time = None  # Placeholder for unified time dimension
-    unified_track = None
-
-    if path.exists(out_path):
-        rmtree(out_path)
-
-    for ds_path in all_res:
+def prune_unnecessary_times(sbf_obs_paths):
+    saved_paths = []
+    timestep_max = 0
+    for ds_path in sbf_obs_paths:
         print(f'Timing {ds_path}')
         ds = xr.open_dataset(ds_path, engine='zarr', decode_timedelta=True)
         ds = drop_nontrack(ds)
-        ds = ds.assign_coords(track=ds.track + track_offset)
-        track_offset += ds.dims['track']
-
-        # Update unified_time with unique values from the current dataset
-        if unified_time is None:
-            unified_time = ds.time.values
-        else:
-            unified_time = np.sort(np.unique(np.concatenate([unified_time, ds.time.values])))
-
-        if unified_track is None:
-            unified_track = ds.track.values
-        else:
-            unified_track = np.sort(np.unique(np.concatenate([unified_track, ds.track.values])))
+        track_present = ~np.isnan(ds.track_seabreeze)
+        timestep_max = np.max([timestep_max, track_present.sum(dim='time').data.max()])
         ds.close()
 
-    track_offset = 0  # Reset track offset for the second pass
-    for ds_path in all_res:
-        print(f'Processing {ds_path}')
-        ds = xr.open_dataset(ds_path, engine='zarr', decode_timedelta=True)
+    for ds_path in sbf_obs_paths:
+        ds = xr.open_dataset(ds_path, engine='zarr')
         ds = drop_nontrack(ds)
-        ds = ds.assign_coords(track=ds.track + track_offset)
-        track_offset += ds.dims['track']
+        track_present = ~np.isnan(ds.track_seabreeze)
+        timestep = np.arange(timestep_max)
 
-        # Align the time dimension
-        ds = ds.reindex({'time': unified_time, 'track': unified_track}, fill_value=np.nan)
+        first_timestep = track_present.argmax(dim='time').data
+        last_timestep = first_timestep + track_present.sum(dim='time').data
+        last_timestep[last_timestep == -1] = 0
+        first_and_last = np.array([first_timestep, last_timestep]).T
 
-        # Remove chunk encoding before saving and ensure compatibility
-        for dv in ds.data_vars:
-            if 'chunks' in ds[dv].encoding:
-                del ds[dv].encoding['chunks']
+        all_tracks = []
+        max_track_id = first_and_last.shape[0] - 1
+        for track_id, (first_ts, last_ts) in enumerate(first_and_last):
+            print(f'Processing {ds_path}: {100*(track_id/max_track_id):.2f}%')
+            if first_ts == 0 and last_ts == 0:
+                continue
+            if first_ts == last_ts:
+                continue
+            this_track = ds.isel(track=track_id, time=slice(first_ts, last_ts))
+            track_size = this_track.time.size
+            time_data = this_track.time.data
+            this_track = this_track.assign(
+                timestep = ('time', np.arange(track_size)),
+            ).swap_dims({'time': 'timestep'}).drop_vars('time')
+            this_track = this_track.reindex(timestep=timestep, fill_value=np.nan)
+            new_times = np.full(timestep.size, np.nan, dtype='datetime64[ns]')
+            new_times[0:track_size] = time_data
+            this_track = this_track.assign(
+                time = ('timestep', new_times)
+            )
+            all_tracks.append(this_track)
+        all_tracks = xr.concat([all_tracks, this_track], dim='track')
+        this_save_path = ds_path.replace('seabreeze-obs.zarr', 'all_tracks.zarr')
+        all_tracks.to_zarr(this_save_path)
+        ds_vars = list(all_tracks.data_vars)
+        ds.close()
+        saved_paths.append(this_save_path)
+        return saved_paths, ds_vars
 
 
-        print(ds.time.shape)
-        print(ds.track.shape)
-        print(ds.vertical_levels.shape)
-        # Explicitly rechunk the dataset to ensure compatibility
-        ds = ds.chunk({'track': 12484*2, 'time': 6215*2, 'vertical_levels': 2000*2})
+def combine_data_vars(track_dataset_paths, vars_to_combine):
+    pass
 
-        if path.exists(out_path):
-            print('Appending to existing output path')
-            ds.to_zarr(out_path, mode='r+')
-        else:
-            print('Creating new output path')
-            ds.to_zarr(out_path)
+if __name__ == '__main__':
+    all_res = sorted(glob('/Users/stgardner4/Desktop/tobac_saves_new/tobac_Save*/seabreeze-obs.zarr'))
+    pruned_paths, vars_to_proc = prune_unnecessary_times(all_res)
+    print(f'Pruned paths: {pruned_paths}')
