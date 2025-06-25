@@ -4,7 +4,6 @@ from shutil import rmtree
 import numpy as np
 import warnings
 from os import path
-from shutil import rmtree
 warnings.filterwarnings('ignore')
 
 def drop_nontrack(ds):
@@ -24,6 +23,7 @@ def prune_unnecessary_times(sbf_obs_paths):
         timestep_max = np.max([timestep_max, track_present.sum(dim='time').data.max()])
         ds.close()
 
+    track_offset = 0
     for ds_path in sbf_obs_paths:
         ds = xr.open_dataset(ds_path, engine='zarr')
         ds = drop_nontrack(ds)
@@ -56,19 +56,34 @@ def prune_unnecessary_times(sbf_obs_paths):
                 time = ('timestep', new_times)
             )
             all_tracks.append(this_track)
-        all_tracks = xr.concat([all_tracks, this_track], dim='track')
-        this_save_path = ds_path.replace('seabreeze-obs.zarr', 'all_tracks.zarr')
+        all_tracks = xr.concat(all_tracks, dim='track')
+        all_tracks['track'] = all_tracks['track'] + track_offset
+        track_offset += all_tracks['track'].size
+        this_save_path = ds_path.replace('seabreeze-obs.zarr', 'tracks.zarr')
+        if path.exists(this_save_path):
+            rmtree(this_save_path)
         all_tracks.to_zarr(this_save_path)
         ds_vars = list(all_tracks.data_vars)
         ds.close()
         saved_paths.append(this_save_path)
-        return saved_paths, ds_vars
+    return saved_paths, ds_vars
 
 
 def combine_data_vars(track_dataset_paths, vars_to_combine):
-    pass
+    print('Combining data variables across all tracks...')
+    max_var_idx = len(vars_to_combine) - 1
+    for i, dv in enumerate(vars_to_combine):
+        all_ds = [xr.open_dataset(f, engine='zarr') for f in track_dataset_paths]
+        all_da = [ds[dv].to_dataset() for ds in all_ds]
+        all_da_merged = xr.concat(all_da, dim='track')
+        all_da_merged.to_zarr(f'/Users/stgardner4/Desktop/tobac_saves_new/all_tracks.zarr', mode='a', group=dv)
+        print(f'Variable {dv} has been combined and saved to all_tracks.zarr {100*(i/max_var_idx):.2f}%')
+        [ds.close() for ds in all_ds]
+        del all_da
+        del all_da_merged
 
 if __name__ == '__main__':
     all_res = sorted(glob('/Users/stgardner4/Desktop/tobac_saves_new/tobac_Save*/seabreeze-obs.zarr'))
     pruned_paths, vars_to_proc = prune_unnecessary_times(all_res)
-    print(f'Pruned paths: {pruned_paths}')
+    combine_data_vars(pruned_paths, vars_to_proc)
+    
