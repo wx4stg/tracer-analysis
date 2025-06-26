@@ -95,6 +95,7 @@ def combine_data_vars(track_dataset_paths, vars_to_combine):
     group_paths = glob('/Volumes/LtgSSD/tobac_saves/tmp.zarr/*')
     group_paths.remove('/Volumes/LtgSSD/tobac_saves/tmp.zarr/zarr.json')
     ds = xr.open_mfdataset(group_paths, engine='zarr')
+    ds['track'] = np.arange(ds.track.shape[0])
     ds.to_zarr('/Volumes/LtgSSD/tobac_saves/all_tracks.zarr')
     rmtree('/Volumes/LtgSSD/tobac_saves/tmp.zarr', ignore_errors=True)
 
