@@ -24,7 +24,12 @@ def prune_unnecessary_times(sbf_obs_paths):
         ds.close()
 
     track_offset = 0
+    ds_vars = None
     for ds_path in sbf_obs_paths:
+        this_save_path = ds_path.replace('seabreeze-obs.zarr', 'tracks.zarr')
+        if path.exists(this_save_path):
+            saved_paths.append(this_save_path)
+            continue
         ds = xr.open_dataset(ds_path, engine='zarr')
         ds = drop_nontrack(ds)
         track_present = ~np.isnan(ds.track_seabreeze)
@@ -59,31 +64,42 @@ def prune_unnecessary_times(sbf_obs_paths):
         all_tracks = xr.concat(all_tracks, dim='track')
         all_tracks['track'] = all_tracks['track'] + track_offset
         track_offset += all_tracks['track'].size
-        this_save_path = ds_path.replace('seabreeze-obs.zarr', 'tracks.zarr')
-        if path.exists(this_save_path):
-            rmtree(this_save_path)
         all_tracks.to_zarr(this_save_path)
         ds_vars = list(all_tracks.data_vars)
         ds.close()
         saved_paths.append(this_save_path)
+    if ds_vars is None:
+        ds = xr.open_dataset(sbf_obs_paths[0], engine='zarr')
+        ds = drop_nontrack(ds)
+        ds_vars = list(ds.data_vars)
     return saved_paths, ds_vars
 
 
 def combine_data_vars(track_dataset_paths, vars_to_combine):
     print('Combining data variables across all tracks...')
     max_var_idx = len(vars_to_combine) - 1
-    for i, dv in enumerate(vars_to_combine):
+    for i, dv in enumerate(sorted(vars_to_combine)):
+        print(f'{100*(i/max_var_idx):.2f}%: {dv}', end='... ')
         all_ds = [xr.open_dataset(f, engine='zarr') for f in track_dataset_paths]
         all_da = [ds[dv].to_dataset() for ds in all_ds]
+        print('Merging', end='... ')
         all_da_merged = xr.concat(all_da, dim='track')
-        all_da_merged.to_zarr(f'/Users/stgardner4/Desktop/tobac_saves_new/all_tracks.zarr', mode='a', group=dv)
-        print(f'Variable {dv} has been combined and saved to all_tracks.zarr {100*(i/max_var_idx):.2f}%')
+        print('Saving', end='... ')
+        all_da_merged.to_zarr(f'/Volumes/LtgSSD/tobac_saves/tmp.zarr', mode='a', group=dv)
+        print('Ceaning up', end='... ')
         [ds.close() for ds in all_ds]
         del all_da
         del all_da_merged
+        print('Done')
+    print('Actually actually combining')
+    group_paths = glob('/Volumes/LtgSSD/tobac_saves/tmp.zarr/*')
+    group_paths.remove('/Volumes/LtgSSD/tobac_saves/tmp.zarr/zarr.json')
+    ds = xr.open_mfdataset(group_paths, engine='zarr')
+    ds.to_zarr('/Volumes/LtgSSD/tobac_saves/all_tracks.zarr')
+    rmtree('/Volumes/LtgSSD/tobac_saves/tmp.zarr', ignore_errors=True)
 
 if __name__ == '__main__':
-    all_res = sorted(glob('/Users/stgardner4/Desktop/tobac_saves_new/tobac_Save*/seabreeze-obs.zarr'))
+    all_res = sorted(glob('/Volumes/LtgSSD/tobac_saves/tobac_Save*/seabreeze-obs.zarr'))
     pruned_paths, vars_to_proc = prune_unnecessary_times(all_res)
     combine_data_vars(pruned_paths, vars_to_proc)
     
