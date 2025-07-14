@@ -72,6 +72,7 @@ def prune_unnecessary_times(sbf_obs_paths):
         ds = xr.open_dataset(sbf_obs_paths[0], engine='zarr')
         ds = drop_nontrack(ds)
         ds_vars = list(ds.data_vars)
+        ds_vars.append('time')
     return saved_paths, ds_vars
 
 
@@ -99,6 +100,7 @@ def combine_data_vars(track_dataset_paths, vars_to_combine):
     group_paths.remove('/Volumes/LtgSSD/tobac_saves/tmp.zarr/zarr.json')
     ds = xr.open_mfdataset(group_paths, engine='zarr')
     ds['track'] = np.arange(ds.track.shape[0])
+    print(ds.time)
     ds.to_zarr(out_path)
     rmtree('/Volumes/LtgSSD/tobac_saves/tmp.zarr', ignore_errors=True)
 
@@ -118,13 +120,14 @@ def vectorized_interpolation(regular_time, tracks_time, tracks_var, array_to_fil
         x = tracks_time[i]
         y = tracks_var[i]
         interpd_var = np.interp(regular_time, x, y)
+        interpd_var[regular_time > x.max()] = np.nan
         array_to_fill[i, :] = interpd_var
     return array_to_fill
 
 
-def interpolate_var_to_reg_time_base(v, regular_time_base, all_tracks):
+def interpolate_var_to_reg_time_base(d, regular_time_base, all_tracks):
     var_reg_time_base = np.full((all_tracks.track.size, regular_time_base.size), np.nan, dtype=np.float64)
-    this_var = all_tracks[v].transpose('track', 'timestep').compute()
+    this_var = d.transpose('track', 'timestep').compute()
     orig_dtype = this_var.data.dtype
     this_var = this_var.astype(np.float64)
     tracks_time = []
@@ -155,16 +158,23 @@ def interpolate_tracks_to_time_base():
     max_track_duration = np.nanmax(all_tracks.track_time_relative)
     regular_time_base = np.arange(0, max_track_duration, 10)
     regular_time_dataset = xr.Dataset()
-    regular_time_dataset.assign_coords(
+    regular_time_dataset = regular_time_dataset.assign_coords(
         time=('time', regular_time_base),
         track=('track', np.arange(all_tracks.track.size))
     )
-    for v in all_tracks.data_vars:
+    all_vars_len = len(list(all_tracks.data_vars))
+    for i, v in enumerate(all_tracks.data_vars):
+        this_var = all_tracks[v]
         if v == 'track_time_relative':
             continue
-        if all_tracks[v].dims != ('track', 'timestep'):
+        if v == 'time':
             continue
-        interpd_var = interpolate_var_to_reg_time_base(v, regular_time_base, all_tracks)
+        if 'vertical_levels' in this_var.dims:
+            this_var = this_var.isel(vertical_levels=0).transpose('track', 'timestep')
+        if this_var.dims != ('track', 'timestep'):
+            continue
+        print(f'{100*(i/all_vars_len):.2f}%: Interpolating {v}')
+        interpd_var = interpolate_var_to_reg_time_base(this_var, regular_time_base, all_tracks)
         regular_time_dataset = regular_time_dataset.assign(
             **{v: (('track', 'time'), interpd_var)}
         )
