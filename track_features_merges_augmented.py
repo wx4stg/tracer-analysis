@@ -111,8 +111,10 @@ def add_eet_to_tobac_data(tfm, date_i_want, client=None, should_debug=False):
             fig, axs = plt.subplots(1, 3, subplot_kw={'projection': ccrs.PlateCarree()})
             fig.set_size_inches(900*px, 600*px)
             wide_eet_handle = axs[0].pcolormesh(features_at_time.lon, features_at_time.lat, this_eet, transform=ccrs.PlateCarree())
-            wide_seg_handle = axs[1].pcolormesh(features_at_time.lon, features_at_time.lat, features_at_time.segmentation_mask, transform=ccrs.PlateCarree())
-            fig.colorbar(wide_eet_handle, ax=axs[0], orientation='horizontal', label='Echo Top Height')
+            seg_to_plot = features_at_time.segmentation_mask.data.astype(float)
+            seg_to_plot[seg_to_plot == 0] = np.nan  # Mask out the background
+            wide_seg_handle = axs[1].pcolormesh(features_at_time.lon, features_at_time.lat, seg_to_plot, transform=ccrs.PlateCarree(), cmap='tab20b')
+            fig.colorbar(wide_eet_handle, ax=axs[0], orientation='horizontal', label='Echo Top Height (m)')
             fig.colorbar(wide_seg_handle, ax=axs[1], orientation='horizontal', label='Segmentation Mask')
             axs[0].set_title('Echo Tops at time:\n' + tfm.time.data[time_idx].astype('datetime64[s]').astype('O').strftime('%Y-%m-%d %H:%M:%S'))
             axs[1].set_title('Segmentation Mask')
@@ -155,7 +157,7 @@ def add_eet_to_tobac_data(tfm, date_i_want, client=None, should_debug=False):
                     feature_ctr_scatter.remove()
                     feature_grid_scatter.remove()
                     feature_target_scatter.remove()
-        if should_debug:
+        if should_debug and fig is not None:
             plt.close(fig)
         start_idx = feature_indicies_at_time[0]
         end_idx = feature_indicies_at_time[-1] + 1

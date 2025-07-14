@@ -504,31 +504,34 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
 
     if should_debug:
         for side in ['continental', 'maritime']:
-            save_path = f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/profiles/{side}_representative.png'
+            save_path = f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/profiles/{side}_representative.pdf'
             if not path.exists(save_path):
                 px = 1/plt.rcParams['figure.dpi']
                 fig, axs = plt.subplots(6, 1)
                 fig.set_size_inches(1800*px, 1800*px)
                 hpa_handle = axs[0].pcolormesh(tfm_w_profiles.time.data, tfm_w_profiles.vertical_levels.data,
-                                               tfm_w_profiles[f'{side}_pressure_profile'].T, cmap='viridis')
+                                               tfm_w_profiles[f'{side}_pressure_profile'].T, cmap='viridis', rasterized=True)
                 axs[0].set_title('Pressure')
                 temp_handle = axs[1].pcolormesh(tfm_w_profiles.time.data, tfm_w_profiles.vertical_levels.data,
-                                                tfm_w_profiles[f'{side}_temperature_profile'].T, cmap='turbo')
+                                                tfm_w_profiles[f'{side}_temperature_profile'].T, cmap='turbo', rasterized=True)
                 axs[1].set_title('Temperature')
                 dew_handle = axs[2].pcolormesh(tfm_w_profiles.time.data, tfm_w_profiles.vertical_levels.data,
-                                               tfm_w_profiles[f'{side}_dewpoint_profile'].T, cmap='BrBG')
+                                               tfm_w_profiles[f'{side}_dewpoint_profile'].T, cmap='BrBG', rasterized=True)
                 axs[2].set_title('Dewpoint')
                 u_handle = axs[3].pcolormesh(tfm_w_profiles.time.data, tfm_w_profiles.vertical_levels.data,
-                                             tfm_w_profiles[f'{side}_u_profile'].T, cmap='RdBu')
+                                             tfm_w_profiles[f'{side}_u_profile'].T, cmap='RdBu', rasterized=True)
                 axs[3].set_title('East component Wind')
                 v_handle = axs[4].pcolormesh(tfm_w_profiles.time.data, tfm_w_profiles.vertical_levels.data,
-                                             tfm_w_profiles[f'{side}_v_profile'].T, cmap='RdBu')
+                                             tfm_w_profiles[f'{side}_v_profile'].T, cmap='RdBu', rasterized=True)
                 axs[4].set_title('North component Wind')
                 msl_handle = axs[5].pcolormesh(tfm_w_profiles.time.data, tfm_w_profiles.vertical_levels.data,
-                                               tfm_w_profiles[f'{side}_msl_profile'].T, cmap='viridis')
+                                               tfm_w_profiles[f'{side}_msl_profile'].T, cmap='viridis', rasterized=True)
                 axs[5].set_title('Height')
                 for ax in axs:
-                    [ax.axvline(this_t, c='k', ls=':') for this_t in all_sonde_dts.astype('datetime64[s]').astype('O')]
+                    if side == 'maritime':
+                        [ax.axvline(this_t, c='tab:blue', ls=':') for this_t in maritime_sonde_dts.astype('datetime64[s]').astype('O')]
+                    elif side == 'continental':
+                        [ax.axvline(this_t, c='tab:red', ls=':') for this_t in continental_sonde_dts.astype('datetime64[s]').astype('O')]
                 fig.colorbar(hpa_handle, ax=axs[0], label='hPa', orientation='vertical')
                 fig.colorbar(temp_handle, ax=axs[1], label='°C', orientation='vertical')
                 fig.colorbar(dew_handle, ax=axs[2], label='°C', orientation='vertical')
@@ -536,6 +539,7 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
                 fig.colorbar(v_handle, ax=axs[4], label='m/s', orientation='vertical')
                 fig.colorbar(msl_handle, ax=axs[5], label='m', orientation='vertical')
                 fig.suptitle(f'{date_i_want.strftime("%Y-%m-%d")}\n{side.capitalize()} Representative Profiles')
+                fig.tight_layout()
                 fig.savefig(save_path)
                 plt.close(fig)
 
@@ -663,8 +667,6 @@ def compute_sounding_stats(tfm):
         height = tfm[f'{side}_msl_profile'].data * units.m
         u = tfm[f'{side}_u_profile'].data * (units.m/units.s)
         v = tfm[f'{side}_v_profile'].data * (units.m/units.s)
-        ccn6 = tfm[f'{side}_ccn_profile_0.6'].data
-        ccn4 = tfm[f'{side}_ccn_profile_0.4'].data
 
         mlcapes = np.full(tfm.time.shape[0], np.nan)
         mlcins = np.full(tfm.time.shape[0], np.nan)
@@ -857,12 +859,13 @@ def add_sfc_aerosol_data(tfm, ss_lower_bound=0.6, ss_upper_bound=0.8, ss_target=
 def apply_coord_transforms(tfm, should_debug=False):
     tfm = tfm.copy()
     radar_lat, radar_lon = 29.47190094, -95.07873535
-    tpcs = coords.TangentPlaneCartesianSystem(ctrLat=radar_lat, ctrLon=radar_lon, ctrAlt=0)
+    tpcs = coords.MapProjection(projection='aeqd', ctrLat=radar_lat, ctrLon=radar_lon, lat_0=radar_lat, lon_0=radar_lon)
     
     x2d, y2d = np.meshgrid(tfm.x.data, tfm.y.data)
     grid_ecef_coords = tpcs.toECEF(x2d.flatten(), y2d.flatten(), np.zeros_like(x2d).flatten())
     
     geosys = coords.GeographicSystem()
+    
     grid_lon, grid_lat, _ = geosys.fromECEF(*grid_ecef_coords)
     grid_lon = grid_lon.reshape(x2d.shape)
     grid_lat = grid_lat.reshape(x2d.shape)
@@ -889,27 +892,27 @@ def apply_coord_transforms(tfm, should_debug=False):
         ax_extent = [tfm.lon.min()-0.25, tfm.lon.max()+0.25, tfm.lat.min()-0.25, tfm.lat.max()+0.25]
         x2d, y2d = np.meshgrid(tfm.x.data, tfm.y.data)
         fig, axs = plt.subplots(2, 3, subplot_kw={'projection': ccrs.PlateCarree()})
-        cartx = axs[0, 0].pcolormesh(tfm.lon, tfm.lat, x2d, transform=ccrs.PlateCarree(), cmap='managua')
+        cartx = axs[0, 0].pcolormesh(tfm.lon, tfm.lat, x2d/1000, transform=ccrs.PlateCarree(), cmap='managua', rasterized=True)
         axs[0, 0].set_title('Cartesian - x')
-        fig.colorbar(cartx, ax=axs[0, 0], orientation='horizontal', label='x')
-        carty = axs[1, 0].pcolormesh(tfm.lon, tfm.lat, y2d, transform=ccrs.PlateCarree(), cmap='managua')
+        fig.colorbar(cartx, ax=axs[0, 0], orientation='horizontal', label='x (km)')
+        carty = axs[1, 0].pcolormesh(tfm.lon, tfm.lat, y2d/1000, transform=ccrs.PlateCarree(), cmap='managua', rasterized=True)
         axs[1, 0].set_title('Cartesian - y')
-        fig.colorbar(carty, ax=axs[1, 0], orientation='horizontal', label='y')
+        fig.colorbar(carty, ax=axs[1, 0], orientation='horizontal', label='y (km)')
 
 
-        geolon = axs[0, 1].pcolormesh(tfm.lon, tfm.lat, tfm.lon, transform=ccrs.PlateCarree(), cmap='managua')
+        geolon = axs[0, 1].pcolormesh(tfm.lon, tfm.lat, tfm.lon, transform=ccrs.PlateCarree(), cmap='managua', rasterized=True)
         axs[0, 1].set_title('Longitude')
-        fig.colorbar(geolon, ax=axs[0, 1], orientation='horizontal', label='Longitude')
-        geolat = axs[1, 1].pcolormesh(tfm.lon, tfm.lat, tfm.lat, transform=ccrs.PlateCarree(), cmap='managua')
+        fig.colorbar(geolon, ax=axs[0, 1], orientation='horizontal', label='Longitude (°E)')
+        geolat = axs[1, 1].pcolormesh(tfm.lon, tfm.lat, tfm.lat, transform=ccrs.PlateCarree(), cmap='managua', rasterized=True)
         axs[1, 1].set_title('Latitude')
-        fig.colorbar(geolat, ax=axs[1, 1], orientation='horizontal', label='Latitude')
+        fig.colorbar(geolat, ax=axs[1, 1], orientation='horizontal', label='Latitude (°N)')
 
-        goesx = axs[0, 2].pcolormesh(tfm.lon, tfm.lat, tfm.g16_scan_x, transform=ccrs.PlateCarree(), cmap='managua')
+        goesx = axs[0, 2].pcolormesh(tfm.lon, tfm.lat, tfm.g16_scan_x, transform=ccrs.PlateCarree(), cmap='managua', rasterized=True)
         axs[0, 2].set_title('GOES x')
-        fig.colorbar(goesx, ax=axs[0, 2], orientation='horizontal', label='GOES x')
-        goesy = axs[1, 2].pcolormesh(tfm.lon, tfm.lat, tfm.g16_scan_y, transform=ccrs.PlateCarree(), cmap='managua')
+        fig.colorbar(goesx, ax=axs[0, 2], orientation='horizontal', label='GOES x (radians)')
+        goesy = axs[1, 2].pcolormesh(tfm.lon, tfm.lat, tfm.g16_scan_y, transform=ccrs.PlateCarree(), cmap='managua', rasterized=True)
         axs[1, 2].set_title('GOES y')
-        fig.colorbar(goesy, ax=axs[1, 2], orientation='horizontal', label='GOES y')
+        fig.colorbar(goesy, ax=axs[1, 2], orientation='horizontal', label='GOES y (radians)')
 
 
         for i in range(2):
@@ -924,7 +927,7 @@ def apply_coord_transforms(tfm, should_debug=False):
         px = 1/plt.rcParams['figure.dpi']  # pixel in inches
         fig.set_size_inches(900*px, 600*px)
         fig.tight_layout()
-        fig.savefig(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/coords/test.png')
+        fig.savefig(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/coords/coords.pdf')
     return tfm
 
 
@@ -932,7 +935,7 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want, client=None, shou
     def make_debug_plot_for_featid(this_feat_time_idx, radar_time, meltlayer):
         mpluse('agg')
         px = 1/plt.rcParams['figure.dpi']
-        radar_filepath = f'/Volumes/LtgSSD/nexrad_gridded/{radar_time.strftime("%B").upper()}/{radar_time.strftime("%Y%m%d")}/KHGX{radar_time.strftime("%Y%m%d_%H%M%S")}_V06_grid.nc'
+        radar_filepath = f'/Volumes/LtgSSD/nexrad_zarr/{radar_time.strftime("%B").upper()}/{radar_time.strftime("%Y%m%d")}/KHGX{radar_time.strftime("%Y%m%d_%H%M%S")}_V06_grid.zarr'
         tfm_time = tfm.isel(time=this_feat_time_idx)
         tfm_time = tfm_time.isel(feature=(tfm_time.feature_time_index == this_feat_time_idx))
         this_time = tfm_time.time.data
@@ -941,7 +944,7 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want, client=None, shou
         else:
             previous_time = tfm.time.data[this_feat_time_idx - 1]
         radar_time = this_time.astype('datetime64[s]').astype(dt).item()
-        radar_filepath = f'/Volumes/LtgSSD/nexrad_gridded/{radar_time.strftime("%B").upper()}/{radar_time.strftime("%Y%m%d")}/KHGX{radar_time.strftime("%Y%m%d_%H%M%S")}_V06_grid.nc'
+        radar_filepath = f'/Volumes/LtgSSD/nexrad_zarr/{radar_time.strftime("%B").upper()}/{radar_time.strftime("%Y%m%d")}/KHGX{radar_time.strftime("%Y%m%d_%H%M%S")}_V06_grid.zarr'
         radar_ds = xr.open_dataset(radar_filepath).isel(time=0)
         closest_to_melt_layer = np.argmin(np.abs(radar_ds.z.data - meltlayer))
         above_melt_layer = radar_ds.isel(z=slice(closest_to_melt_layer, None))
@@ -954,7 +957,7 @@ def add_timeseries_data_to_toabc_path(tobac_data, date_i_want, client=None, shou
             raise ValueError('Expected exactly one lightning data file, but found:', len(lightning_filepaths))
         lightning_filepath = lightning_filepaths[0]
         lightning = xr.open_dataset(lightning_filepath)
-        lightning_data_at_time = lightning.sel(grid_time=slice(previous_time, this_time))
+        
         flash_mask = (lightning_data_at_time.flash_time_start.data > previous_time) & (lightning_data_at_time.flash_time_end.data < this_time)
         event_mask = (lightning_data_at_time.event_time.data > previous_time) & (lightning_data_at_time.event_time.data < this_time)
         lightning_data_at_time = lightning_data_at_time.isel(number_of_flashes=flash_mask, number_of_events=event_mask)
@@ -1155,14 +1158,15 @@ def convert_to_track_time(sbf_obs):
         'feature_mlcape' : np.nanmean,
         'feature_mlcin' : np.nanmean,
         'feature_mlecape' : np.nanmean,
-        'feature_projection_x_coordinate' : np.nanmean,
-        'feature_projection_y_coordinate' : np.nanmean,
+        'feature_projection_x_coordinate' : np.nanmin,
+        'feature_projection_y_coordinate' : np.nanmin,
         'feature_rhvdeficitcol' : np.nanmax,
         'feature_rhvdeficitcol_mean' : np.nanmean,
         'feature_rhvdeficitcol_total' : np.nansum,
         'feature_rhvdeficitvol' : np.nansum,
         'feature_rhvdeficitwt_total' : np.nansum,
         'feature_seabreeze' : np.nanmean,
+        'feature_seabreeze_proximity' : np.nanmean,
         'feature_sfc_rh' : np.nanmean,
         'feature_six_km_bwd' : np.nanmean,
         'feature_six_km_lapse' : np.nanmean,
@@ -1208,7 +1212,7 @@ if __name__ == '__main__':
     date_i_want = sys.argv[1]
     date_i_want = dt.strptime(date_i_want, '%Y-%m-%d')
     should_debug = ((len(sys.argv) > 2) and (sys.argv[2] == '--debug'))
-    if True:
+    if should_debug:
         pth(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/coords').mkdir(parents=True, exist_ok=True)
         pth(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/tobac_ts').mkdir(parents=True, exist_ok=True)
         pth(f'./debug-figs-{date_i_want.strftime("%Y%m%d")}/eet').mkdir(parents=True, exist_ok=True)
@@ -1224,8 +1228,7 @@ if __name__ == '__main__':
         print('I don\'t have EET for this day, computing it')
         add_eet_to_radar_data(date_i_want, client)
     tfm_eet = add_eet_to_tobac_data(tfm_coord, date_i_want, client, should_debug=should_debug)
-    tfm_ts = add_timeseries_data_to_toabc_path(tfm_eet, date_i_want, client=client, should_debug=True)
-    
+    tfm_ts = add_timeseries_data_to_toabc_path(tfm_eet, date_i_want, client=client, should_debug=should_debug)
     print('Adding satellite data to tobac data')
     tfm_ctt = add_goes_data_to_tobac_path(tfm_ts, client, should_debug=should_debug)
     print('Adding seabreeze')
