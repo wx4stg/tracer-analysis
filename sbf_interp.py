@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 
+from os import path
+from shutil import rmtree
+
 import geopandas as gpd
 import xarray as xr
 from datetime import datetime as dt
 import numpy as np
 from matplotlib.path import Path
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, Point
 from pyxlma import coords
 import sys
 
@@ -143,6 +146,7 @@ if __name__ == '__main__':
     tfm['seabreeze'] = all_seabreezes_ds
     print('Identifying features...')
     feature_seabreeze = xr.zeros_like(tfm.feature, dtype=int)
+    feature_distance = xr.zeros_like(tfm.feature, dtype=float)
     for i, feat_id in enumerate(tfm.feature.data):
         this_feat = tfm.sel(feature=feat_id)
         this_feat_time_idx = this_feat.feature_time_index.compute().data.item()
@@ -156,11 +160,18 @@ if __name__ == '__main__':
         this_polyline = polyline[polyline.index.values == this_feat_time]['geometry'].values[0]
         this_polyline_mpl = Path(np.array(this_polyline.exterior.coords))
         this_seabreeze = int(this_polyline_mpl.contains_point((this_feat_lon, this_feat_lat))) - 2
+        this_feat_point = gpd.GeoSeries(Point(this_feat_lon, this_feat_lat)).set_crs('EPSG:4326').to_crs(f'+proj=aeqd +lat_0={this_feat_lat} +lon_0={this_feat_lon} +datum=WGS84 +units=m +no_defs')
+        this_feat_distance = gpd.GeoSeries(this_polyline).set_crs('EPSG:4326').to_crs(f'+proj=aeqd +lat_0={this_feat_lat} +lon_0={this_feat_lon} +datum=WGS84 +units=m +no_defs').boundary.distance(this_feat_point)[0]
         feature_seabreeze.data[i] = this_seabreeze
+        feature_distance.data[i] = this_feat_distance
 
     tfm['feature_seabreeze'] = feature_seabreeze
+    tfm['feature_seabreeze_proximity'] = feature_distance
     print('Saving zarr...')
-    tfm.chunk('auto').to_zarr(tfm_path.replace('Track_features_merges.nc', 'seabreeze.zarr'))
+    out_path = tfm_path.replace('Track_features_merges.nc', 'seabreeze.zarr')
+    if path.exists(out_path):
+        rmtree(out_path)
+    tfm.chunk('auto').to_zarr(out_path)
 
     polyline = polyline.sort_index()
     polyline.to_file(polyline_path.replace('.json', '_interpolated.json'), driver='GeoJSON')
