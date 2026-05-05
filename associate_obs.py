@@ -96,11 +96,16 @@ def add_seabreeze_to_features(tfm, client=None, should_debug=False):
             ax.add_feature(USCOUNTIES.with_scale('5m'))
             fig.savefig(save_path)
             plt.close(fig)
+    date_i_want = tfm.time.data[0].astype('datetime64[s]').astype(dt).replace(hour=0, minute=0, second=0, microsecond=0)
+    seabreeze_times = gpd.read_file(f'./sam_polyline/{date_i_want.strftime('%Y-%m-%d')}.json')
+    analysis_times = seabreeze_times['index']
+    analysis_times_str = [at.strftime('%H:%M:%S UTC') for at in analysis_times.astype('datetime64[s]').astype('O')]
     feature_seabreezes = identify_side(tfm.feature_time.values.astype('datetime64[s]').astype(float), tfm.feature_lon.values, tfm.feature_lat.values, tfm.time.values.astype('datetime64[s]').astype(float), 
                                     tfm.seabreeze.transpose('time', *tfm.lat.dims).compute().data, tfm.lon.values, tfm.lat.values)
     tfm = tfm.assign({
         'feature_seabreeze' : (('feature',), feature_seabreezes)
     })
+    tfm.attrs['seabreeze_analysis_times'] = '\n'.join(analysis_times_str)
     if should_debug:
         if client is not None:
             res = client.map(make_sbf_plot, np.arange(tfm.time.shape[0]))
@@ -500,7 +505,15 @@ def add_radiosonde_data(tfm, n_sounding_levels=2000, should_debug=False):
     for var in new_continental_vars.keys():
         tfm_w_profiles[var].attrs['units'] = 'hPa' if 'pressure' in var else 'C' if 'temperature' in var else 'm/s' if 'u' in var or 'v' in var else 'm'
 
-    tfm_w_profiles.attrs['soundings_used'] = [path.basename(f) for f in all_sonde_files]
+    tfm_w_profiles.attrs['maritime_soundings_used'] = '\n'.join(maritime_sonde_files)
+    tfm_w_profiles.attrs['maritime_soundings_dts'] = '\n'.join([t.strftime('%H:%M:%S') for t in maritime_sonde_dts.astype('datetime64[s]').astype('O')])
+    tfm_w_profiles.attrs['maritime_soundings_lons'] = '\n'.join([str(lon) for lon in maritime_sonde_lons])
+    tfm_w_profiles.attrs['maritime_soundings_lats'] = '\n'.join([str(lat) for lat in maritime_sonde_lats])
+    tfm_w_profiles.attrs['continental_soundings_used'] = '\n'.join(continental_sonde_files)
+    tfm_w_profiles.attrs['continental_soundings_dts'] = '\n'.join([t.strftime('%H:%M:%S') for t in continental_sonde_dts.astype('datetime64[s]').astype('O')])
+    tfm_w_profiles.attrs['continental_soundings_lons'] = '\n'.join([str(lon) for lon in continental_sonde_lons])
+    tfm_w_profiles.attrs['continental_soundings_lats'] = '\n'.join([str(lat) for lat in continental_sonde_lats])
+    
 
     if should_debug:
         for side in ['continental', 'maritime']:
@@ -763,6 +776,21 @@ def add_sfc_aerosol_data(tfm, ss_lower_bound=0.6, ss_upper_bound=0.8, ss_target=
     maritime_times = []
     continental_ccn = []
     continental_times = []
+    arm_maritime_time = None
+    arm_continental_time = None
+    arm_ccn_lon = None
+    arm_ccn_lat = None
+    arm_ccn_sbf = None
+    tamu_maritime_time = None
+    tamu_continental_time = None
+    tamu_ccn_lon_window = None
+    tamu_ccn_lat_window = None
+    tamu_ccn_sbf = None
+    guy_maritime_time = None
+    guy_continental_time = None
+    guy_lat = None
+    guy_lon = None
+    guy_ccn_sbf = None
     arm_ccn_path = '/Volumes/LtgSSD/arm-ccn-fix/sam_pyrcel_out.csv'
     if path.exists(arm_ccn_path):
         arm_ccn = pd.read_csv(arm_ccn_path, parse_dates=['timestamp']).set_index('timestamp', drop=True)
@@ -852,7 +880,36 @@ def add_sfc_aerosol_data(tfm, ss_lower_bound=0.6, ss_upper_bound=0.8, ss_target=
         f'maritime_ccn_profile_{ss_target:.1f}' : (('time', 'vertical_levels'), maritime_ccn_vert),
         f'continental_ccn_profile_{ss_target:.1f}' : (('time', 'vertical_levels'), continental_ccn_vert)
     })
-
+    if arm_maritime_time is not None:
+        tfm_w_aerosols.attrs['arm_maritime_ccn_times'] = '\n'.join(pd.to_datetime(arm_maritime_time).strftime('%Y-%m-%d %H:%M:%S'))
+        tfm_w_aerosols.attrs['arm_maritime_ccn_values'] = '\n'.join([str(val) for val in arm_ccn_maritime])
+        tfm_w_aerosols.attrs['arm_maritime_ccn_lon'] = '\n'.join(f'{x:.2f}' for x in arm_ccn_lon[arm_ccn_sbf == -1].tolist())
+        tfm_w_aerosols.attrs['arm_maritime_ccn_lat'] = '\n'.join(f'{x:.2f}' for x in arm_ccn_lat[arm_ccn_sbf == -1].tolist())
+    if arm_continental_time is not None:
+        tfm_w_aerosols.attrs['arm_continental_ccn_times'] = '\n'.join(pd.to_datetime(arm_continental_time).strftime('%Y-%m-%d %H:%M:%S'))
+        tfm_w_aerosols.attrs['arm_continental_ccn_values'] = '\n'.join([str(val) for val in arm_ccn_continental])
+        tfm_w_aerosols.attrs['arm_continental_ccn_lon'] = '\n'.join(f'{x:.2f}' for x in arm_ccn_lon[arm_ccn_sbf == -2].tolist())
+        tfm_w_aerosols.attrs['arm_continental_ccn_lat'] = '\n'.join(f'{x:.2f}' for x in arm_ccn_lat[arm_ccn_sbf == -2].tolist())
+    if tamu_maritime_time is not None:
+        tfm_w_aerosols.attrs['tamu_maritime_ccn_times'] = '\n'.join(pd.to_datetime(tamu_maritime_time).strftime('%Y-%m-%d %H:%M:%S'))
+        tfm_w_aerosols.attrs['tamu_maritime_ccn_values'] = '\n'.join([str(val) for val in tamu_ccn_maritime])
+        tfm_w_aerosols.attrs['tamu_maritime_ccn_lon'] = '\n'.join(f'{x:.2f}' for x in tamu_ccn_lon_window[tamu_ccn_sbf == -1].tolist())
+        tfm_w_aerosols.attrs['tamu_maritime_ccn_lat'] = '\n'.join(f'{x:.2f}' for x in tamu_ccn_lat_window[tamu_ccn_sbf == -1].tolist())
+    if tamu_continental_time is not None:
+        tfm_w_aerosols.attrs['tamu_continental_ccn_times'] = '\n'.join(pd.to_datetime(tamu_continental_time).strftime('%Y-%m-%d %H:%M:%S'))
+        tfm_w_aerosols.attrs['tamu_continental_ccn_values'] = '\n'.join([str(val) for val in tamu_ccn_continental])
+        tfm_w_aerosols.attrs['tamu_continental_ccn_lon'] = '\n'.join(f'{x:.2f}' for x in tamu_ccn_lon_window[tamu_ccn_sbf == -2].tolist())
+        tfm_w_aerosols.attrs['tamu_continental_ccn_lat'] = '\n'.join(f'{x:.2f}' for x in tamu_ccn_lat_window[tamu_ccn_sbf == -2].tolist())
+    if guy_maritime_time is not None:
+        tfm_w_aerosols.attrs['guy_maritime_ccn_times'] = '\n'.join(pd.to_datetime(guy_maritime_time).strftime('%Y-%m-%d %H:%M:%S'))
+        tfm_w_aerosols.attrs['guy_maritime_ccn_values'] = '\n'.join([str(val) for val in guy_ccn_maritime])
+        tfm_w_aerosols.attrs['guy_maritime_ccn_lon'] = '\n'.join(f'{x:.2f}' for x in guy_lon[guy_ccn_sbf == -1].tolist())
+        tfm_w_aerosols.attrs['guy_maritime_ccn_lat'] = '\n'.join(f'{x:.2f}' for x in guy_lat[guy_ccn_sbf == -1].tolist())
+    if guy_continental_time is not None:
+        tfm_w_aerosols.attrs['guy_continental_ccn_times'] = '\n'.join(pd.to_datetime(guy_continental_time).strftime('%Y-%m-%d %H:%M:%S'))
+        tfm_w_aerosols.attrs['guy_continental_ccn_values'] = '\n'.join([str(val) for val in guy_ccn_continental])
+        tfm_w_aerosols.attrs['guy_continental_ccn_lon'] = '\n'.join(f'{x:.2f}' for x in guy_lon[guy_ccn_sbf == -2].tolist())
+        tfm_w_aerosols.attrs['guy_continental_ccn_lat'] = '\n'.join(f'{x:.2f}' for x in guy_lat[guy_ccn_sbf == -2].tolist())
     return tfm_w_aerosols
 
 
@@ -1248,9 +1305,10 @@ if __name__ == '__main__':
     tfm_w_parents = generate_seg_mask_cell_track(generate_seg_mask_cell_track(tfm_sounding_stats, convert_to='track'), convert_to='cell')
     print('Converting to track time')
     tfm_obs = convert_to_track_time(tfm_w_parents)
+    tfm_obs.attrs = tfm_w_parents.attrs
     final_out_path = tfm_path.replace('.zarr', '-obs.zarr')
     tfm_obs = tfm_obs.drop_vars(['feature_time_str'], errors='ignore')
-    below_cloud_processing(tfm_obs, date_i_want)
+    # below_cloud_processing(tfm_obs, date_i_want)
     client.close()
     if path.exists(final_out_path):
         rmtree(final_out_path)

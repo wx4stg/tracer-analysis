@@ -12,6 +12,6 @@ sam_polyline/*_interpolated.json
 agu_figs/
 debug-figs-*/
 below_cloud
-./thesis_figs
-./mwr_figs
-./tracerpaws
+thesis_figs/
+mwr_figs/
+tracerpaws/
